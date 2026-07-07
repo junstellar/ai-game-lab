@@ -1,0 +1,62 @@
+/* ============================================================
+   AI 게임 랩 — 공통 테마 / shared.css
+   허브(index.html)와 모든 게임 폴더가 함께 사용합니다.
+   게임 폴더에서는 <link rel="stylesheet" href="../shared.css"> 로 불러오세요.
+   ============================================================ */
+:root{
+  --bg:#0f1115;
+  --panel:#1a1d24;
+  --panel-2:#20242e;
+  --border:#2a2f3a;
+  --text:#e6e8ec;
+  --muted:#9aa0ab;
+  --accent:#7c5cff;
+  --accent-2:#4f8cff;
+  --good:#2ea043;
+  --bad:#e5534b;
+  --radius:16px;
+  --maxw:820px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:-apple-system,"Segoe UI","Malgun Gothic",sans-serif;
+  background:radial-gradient(1200px 600px at 50% -10%, #1a1f2e 0%, var(--bg) 55%);
+  color:var(--text);
+  line-height:1.55;
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--accent-2);text-decoration:none;}
+a:hover{text-decoration:underline;}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:20px;}
+.muted{color:var(--muted);}
+
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:12px 18px;border-radius:12px;border:1px solid var(--border);
+  background:var(--panel);color:var(--text);font-size:1rem;font-weight:600;
+  cursor:pointer;text-decoration:none;
+  transition:transform .06s ease, background .15s ease, border-color .15s;
+  user-select:none;
+}
+.btn:hover{background:var(--panel-2);border-color:#39404d;text-decoration:none;}
+.btn:active{transform:translateY(1px);}
+.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));border:none;color:#fff;}
+.btn-primary:hover{filter:brightness(1.08);}
+
+.badge{
+  display:inline-block;padding:3px 10px;border-radius:999px;font-size:.72rem;font-weight:600;
+  background:rgba(124,92,255,.14);color:#c9bcff;border:1px solid rgba(124,92,255,.3);
+  white-space:nowrap;
+}
+.badge-soon{background:rgba(154,160,171,.12);color:var(--muted);border-color:var(--border);}
+
+/* 토스트 (공유 완료 등 알림) */
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);
+  background:#0b0d12;border:1px solid var(--border);color:var(--text);
+  padding:12px 18px;border-radius:12px;font-size:.9rem;opacity:0;pointer-events:none;
+  transition:opacity .2s, transform .2s;z-index:50;box-shadow:0 10px 30px rgba(0,0,0,.45);
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 게임 랩 — 혼자, AI로 만드는 미니게임 모음</title>
+<meta name="description" content="RTX GPU와 AI로 혼자 만드는 브라우저 미니게임 모음. 공개빌드로 새 게임을 계속 추가합니다.">
+<meta property="og:title" content="AI 게임 랩">
+<meta property="og:description" content="혼자, AI로, 공개적으로 만드는 브라우저 미니게임 모음.">
+<link rel="stylesheet" href="shared.css">
+<style>
+  header.hero{ text-align:center; padding:44px 20px 6px; }
+  .hero h1{ margin:0 0 8px; font-size:2rem; letter-spacing:-.5px; }
+  .hero .tag{ color:var(--muted); font-size:1rem; margin:0; }
+  .hero .pill{ margin-top:16px; }
+
+  .grid{
+    display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+    gap:16px; margin:28px 0 40px;
+  }
+  .card{
+    display:flex; flex-direction:column; gap:10px;
+    background:var(--panel); border:1px solid var(--border); border-radius:var(--radius);
+    padding:22px 20px; position:relative; overflow:hidden; color:inherit;
+    transition:transform .12s ease, border-color .15s;
+  }
+  a.card:hover{ transform:translateY(-3px); border-color:#3a4150; text-decoration:none; }
+  .card .accent-bar{ position:absolute; left:0; top:0; height:4px; width:100%; }
+  .card .emoji{ font-size:2.4rem; line-height:1; }
+  .card h2{ margin:0; font-size:1.15rem; }
+  .card p{ margin:0; color:var(--muted); font-size:.9rem; flex:1; }
+  .card .tags{ display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; align-items:center; }
+  .card.soon{ opacity:.6; }
+
+  footer{
+    text-align:center; color:var(--muted); font-size:.85rem;
+    padding:28px 20px 50px; border-top:1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+  <header class="hero">
+    <h1>🚀 AI 게임 랩</h1>
+    <p class="tag">혼자 · AI로 · 공개적으로 만드는 브라우저 미니게임 모음</p>
+    <div class="pill"><span class="badge">🛠️ 새 게임을 계속 추가합니다 · build in public</span></div>
+  </header>
+
+  <main class="wrap">
+    <div class="grid" id="grid"></div>
+  </main>
+
+  <footer>
+    <p>만든 사람: <a href="https://junstellar.github.io/">To the Moon</a> · 제작 과정은 블로그에 공개합니다.</p>
+  </footer>
+
+  <script src="games.js"></script>
+  <script>
+    (function(){
+      var grid=document.getElementById('grid');
+      var games=(window.GAMES||[]);
+      if(!games.length){
+        grid.innerHTML='<p class="muted">아직 게임이 없어요. 곧 추가됩니다!</p>';
+        return;
+      }
+      games.forEach(function(g){
+        var live = g.status==='live';
+        var el = document.createElement(live?'a':'div');
+        el.className='card'+(live?'':' soon');
+        if(live){ el.href='./'+g.id+'/'; }
+        var tags=(g.tags||[]).map(function(t){ return '<span class="badge">'+t+'</span>'; }).join('');
+        var soonBadge = live ? '' : '<span class="badge badge-soon">곧 공개</span>';
+        el.innerHTML=
+          '<div class="accent-bar" style="background:'+(g.accent||'var(--accent)')+'"></div>'+
+          '<div class="emoji">'+(g.emoji||'🎮')+'</div>'+
+          '<h2>'+g.title+'</h2>'+
+          '<p>'+g.desc+'</p>'+
+          '<div class="tags">'+tags+' '+soonBadge+'</div>';
+        grid.appendChild(el);
+      });
+    })();
+  </script>
+</body>
+</html>

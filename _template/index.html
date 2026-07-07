@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>새 게임 — AI 게임 랩</title>
+<link rel="stylesheet" href="../shared.css">
+</head>
+<body>
+  <div class="wrap" style="display:flex;justify-content:space-between;align-items:center;">
+    <a class="muted" href="../">← 게임 랩</a>
+    <span class="badge">🎮 새 게임</span>
+  </div>
+
+  <main class="wrap" id="game" style="text-align:center;">
+    <!-- ↓↓↓ 여기부터 게임을 만드세요 ↓↓↓ -->
+    <h1>새 게임 뼈대</h1>
+    <p class="muted">이 <code>_template</code> 폴더를 복사해 <code>&lt;게임id&gt;/</code> 로 만든 뒤 개발을 시작하세요.<br>
+       완성되면 <code>../games.js</code> 에 카드 한 줄을 추가하면 허브에 자동 등장합니다.</p>
+    <p><button class="btn btn-primary" id="demo">📤 결과 공유 예시</button></p>
+    <!-- ↑↑↑ 여기까지 ↑↑↑ -->
+  </main>
+
+  <script src="../share.js"></script>
+  <script>
+    // 게임이 끝나면 이렇게 결과를 공유하세요 (모든 게임 공통 · 바이럴 내장):
+    document.getElementById('demo').onclick=function(){
+      var results=[true, true, false, true];        // 각 라운드 정답 여부
+      var score=results.filter(Boolean).length;
+      GameShare.share({
+        text:'🎮 새 게임 — 오늘 '+score+'/'+results.length+'\n'+GameShare.grid(results),
+        url:'https://junstellar.github.io/games/<id>/'   // <id> 를 실제 폴더명으로
+      });
+    };
+  </script>
+</body>
+</html>
