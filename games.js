@@ -16,6 +16,15 @@ window.GAMES = [
     status: "live",
     accent: "#7c5cff"
   },
+  {
+    id: "hangul-word",
+    title: "한글 단어 맞히기",
+    emoji: "🟩",
+    desc: "매일 바뀌는 두 글자 한글 단어를 6번 안에 맞혀요. 자모 단위 힌트 · 결과 이모지 공유! (한글 워들)",
+    tags: ["퍼즐", "데일리", "한글"],
+    status: "live",
+    accent: "#2ea043"
+  },
 
   // ▼▼▼ 새 게임은 여기 아래에 추가하세요 ▼▼▼
   // {
