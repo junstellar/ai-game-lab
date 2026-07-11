@@ -11,7 +11,11 @@
   .topbar .home{ font-size:.85rem; color:var(--muted); }
   .game{ max-width:460px; margin:0 auto; padding:6px 20px 60px; }
   .title{ text-align:center; margin:6px 0 2px; font-size:1.4rem; }
-  .sub{ text-align:center; color:var(--muted); font-size:.85rem; margin:0 0 14px; }
+  .sub{ text-align:center; color:var(--muted); font-size:.85rem; margin:0 0 10px; }
+  .hintbox{ text-align:center; background:rgba(46,160,67,.12); border:1px solid rgba(46,160,67,.3);
+        color:#a9e6ba; border-radius:12px; padding:10px 14px; margin:2px auto 16px; max-width:420px;
+        font-size:.98rem; line-height:1.45; }
+  .hintbox b{ color:#eafff0; font-weight:700; }
 
   .board{ display:flex; flex-direction:column; gap:10px; align-items:center; margin-bottom:16px; min-height:60px; }
   .row{ display:flex; gap:14px; }
@@ -82,7 +86,83 @@
   }
 
   /* ================= 단어 풀 & 오늘의 단어 ================= */
-  var WORDS = ["사과","바다","하늘","구름","나무","학교","친구","가족","사랑","행복","시간","겨울","여름","노래","그림","편지","지도","열쇠","안경","우산","신발","모자","가방","책상","의자","창문","거울","시계","전화","커피","우유","김치","라면","만두","사탕","딸기","포도","수박","참외","토끼","여우","사자","기차","버스","도로","공원","시장","병원","은행","교실","축구","야구","농구","수영","바람","눈물","미소","얼굴","마음","생각","약속","선물","영화","음악","과학","수학","역사","지구","우주","별빛","달빛","햇살","안개","이슬"];
+  // w=정답, c=큰 틀 힌트(의미 영역을 알려주되 정답을 직접 말하지 않게)
+  var WORDS = [
+    {w:"사과",c:"빨갛고 아삭한 흔한 과일"},
+    {w:"바다",c:"파도가 치는 넓고 짠 물"},
+    {w:"하늘",c:"고개 들면 보이는 파란 공간"},
+    {w:"구름",c:"하늘에 떠다니는 하얀 것"},
+    {w:"나무",c:"숲을 이루는 키 큰 식물"},
+    {w:"학교",c:"학생들이 공부하러 가는 곳"},
+    {w:"친구",c:"가깝게 지내는 사이"},
+    {w:"가족",c:"함께 사는 한 집안 사람들"},
+    {w:"사랑",c:"아끼고 좋아하는 마음"},
+    {w:"행복",c:"기쁘고 만족스러운 상태"},
+    {w:"시간",c:"시계가 흐르며 재는 것"},
+    {w:"겨울",c:"눈 오고 추운 계절"},
+    {w:"여름",c:"덥고 해가 긴 계절"},
+    {w:"노래",c:"목소리로 부르는 음악"},
+    {w:"그림",c:"붓이나 펜으로 그린 것"},
+    {w:"편지",c:"마음을 적어 보내는 글"},
+    {w:"지도",c:"길과 위치를 그린 것"},
+    {w:"열쇠",c:"자물쇠를 여는 도구"},
+    {w:"안경",c:"눈에 쓰는, 잘 보이게 하는 것"},
+    {w:"우산",c:"비 올 때 펴서 쓰는 것"},
+    {w:"신발",c:"발에 신는 것"},
+    {w:"모자",c:"머리에 쓰는 것"},
+    {w:"가방",c:"물건을 넣어 메고 다니는 것"},
+    {w:"책상",c:"앉아서 공부하는 가구"},
+    {w:"의자",c:"앉는 가구"},
+    {w:"창문",c:"벽에 나서 밖이 보이는 것"},
+    {w:"거울",c:"얼굴을 비춰 보는 것"},
+    {w:"시계",c:"시간을 알려주는 물건"},
+    {w:"전화",c:"멀리 있는 사람과 말하는 기기"},
+    {w:"커피",c:"쓰고 향 좋은, 잠 깨는 음료"},
+    {w:"우유",c:"소에서 나는 하얀 음료"},
+    {w:"김치",c:"배추로 담그는 매운 반찬"},
+    {w:"라면",c:"끓여 먹는 인스턴트 면"},
+    {w:"만두",c:"소를 넣어 빚어 찌는 것"},
+    {w:"사탕",c:"달고 딱딱한 군것질"},
+    {w:"딸기",c:"빨갛고 씨가 콕콕 박힌 과일"},
+    {w:"포도",c:"알알이 송이로 열리는 과일"},
+    {w:"수박",c:"크고 속이 빨간 여름 과일"},
+    {w:"참외",c:"노랗고 단 여름 과일"},
+    {w:"토끼",c:"귀가 길고 깡충 뛰는 동물"},
+    {w:"여우",c:"꾀 많다는 산짐승"},
+    {w:"사자",c:"갈기 있는 밀림의 왕"},
+    {w:"기차",c:"철길 위를 달리는 것"},
+    {w:"버스",c:"많은 사람이 함께 타는 대중교통"},
+    {w:"도로",c:"차가 다니는 길"},
+    {w:"공원",c:"산책하고 쉬는 넓은 곳"},
+    {w:"시장",c:"물건을 사고파는 곳"},
+    {w:"병원",c:"아프면 치료받으러 가는 곳"},
+    {w:"은행",c:"돈을 맡기고 찾는 곳"},
+    {w:"교실",c:"수업을 듣는 방"},
+    {w:"축구",c:"발로 공을 차는 운동"},
+    {w:"야구",c:"방망이로 공을 치는 운동"},
+    {w:"농구",c:"공을 높은 골대에 넣는 운동"},
+    {w:"수영",c:"물에서 헤엄치는 운동"},
+    {w:"바람",c:"살랑 부는 공기의 흐름"},
+    {w:"눈물",c:"슬프면 눈에서 나오는 것"},
+    {w:"미소",c:"살짝 짓는 웃음"},
+    {w:"얼굴",c:"눈·코·입이 있는 곳"},
+    {w:"마음",c:"생각과 감정이 담긴 곳"},
+    {w:"생각",c:"머릿속에 떠올리는 것"},
+    {w:"약속",c:"지키기로 한 다짐"},
+    {w:"선물",c:"마음 담아 건네는 것"},
+    {w:"영화",c:"극장에서 보는 것"},
+    {w:"음악",c:"귀로 듣는 예술"},
+    {w:"과학",c:"자연을 탐구하는 학문"},
+    {w:"수학",c:"숫자와 도형의 학문"},
+    {w:"역사",c:"지난 일의 기록"},
+    {w:"지구",c:"우리가 사는 행성"},
+    {w:"우주",c:"별과 은하가 있는 공간"},
+    {w:"별빛",c:"밤하늘 별의 반짝임"},
+    {w:"달빛",c:"밤을 비추는 달의 빛"},
+    {w:"햇살",c:"내리쬐는 해의 빛"},
+    {w:"안개",c:"뿌옇게 낀 물방울"},
+    {w:"이슬",c:"새벽 풀잎에 맺힌 물방울"}
+  ];
   var MAX_TRIES = 6;
   var STORE_KEY = "hangulword:daily";
 
@@ -98,7 +178,7 @@
   /* ================= 상태 ================= */
   var game=document.getElementById('game');
   var practice=false;
-  var answer, guesses, finished;
+  var answer, answerHint, guesses, finished;
 
   function loadDaily(){
     try{
@@ -114,14 +194,14 @@
 
   function startDaily(){
     practice=false;
-    answer=wordForDay(dayIndex());
+    var obj=wordForDay(dayIndex()); answer=obj.w; answerHint=obj.c;
     var saved=loadDaily();
     guesses = saved ? saved.guesses.slice() : [];
     finished = saved ? saved.status : null;   // null | 'win' | 'lose'
     render();
   }
   function startPractice(){
-    practice=true; answer=pickRandom(); guesses=[]; finished=null; render();
+    practice=true; var obj=pickRandom(); answer=obj.w; answerHint=obj.c; guesses=[]; finished=null; render();
   }
 
   /* ================= 렌더 ================= */
@@ -147,6 +227,7 @@
     var body =
       '<h1 class="title">한글 단어 맞히기</h1>'+
       '<p class="sub">'+sub+' · '+guesses.length+'/'+MAX_TRIES+'</p>'+
+      '<div class="hintbox">💡 힌트: <b>'+answerHint+'</b></div>'+
       '<div class="board" id="board">'+rows+'</div>';
 
     if(finished){ body += '<div id="result"></div>'; }
