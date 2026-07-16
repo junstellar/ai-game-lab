@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>탑 쌓기 — AI 게임 랩</title>
+<meta name="description" content="움직이는 블록을 타이밍 맞춰 착착! 삐끗하면 잘려나가는 원버튼 아케이드. 몇 층까지 쌓을 수 있나요?">
+<link rel="stylesheet" href="../shared.css">
+<style>
+  .topbar{ display:flex; align-items:center; justify-content:space-between; padding:14px 18px; max-width:560px; margin:0 auto; }
+  .topbar .home{ font-size:.85rem; color:var(--muted); }
+  .game{ max-width:480px; margin:0 auto; padding:2px 12px 40px; }
+
+  .stage{ position:relative; width:100%; border-radius:var(--radius); overflow:hidden;
+          background:linear-gradient(180deg,#141827 0%, #0f1115 70%); border:1px solid var(--border); }
+  canvas{ display:block; width:100%; touch-action:none; cursor:pointer; }
+
+  .score{ position:absolute; top:12px; left:0; right:0; text-align:center; pointer-events:none;
+          font-size:2.2rem; font-weight:800; color:#fff; text-shadow:0 2px 10px rgba(0,0,0,.5); }
+  .combo{ position:absolute; top:64px; left:0; right:0; text-align:center; pointer-events:none;
+          font-size:.85rem; font-weight:700; color:#ffd166; opacity:0; transition:opacity .15s; }
+  .combo.show{ opacity:1; }
+
+  .overlay{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+            gap:12px; background:rgba(10,12,18,.72); backdrop-filter:blur(2px); text-align:center; padding:20px; }
+  .overlay h2{ margin:0; font-size:1.5rem; }
+  .overlay p{ margin:0; color:var(--muted); font-size:.9rem; line-height:1.6; }
+  .overlay .big{ font-size:3rem; font-weight:800; margin:2px 0; }
+  .hidden{ display:none !important; }
+
+  .mystats{ display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; max-width:300px; margin:4px auto 6px; }
+  .mystats .stat{ background:rgba(26,29,36,.9); border:1px solid var(--border); border-radius:10px; padding:8px; font-size:.8rem; color:var(--muted); }
+  .mystats .stat b{ display:block; color:var(--text); font-size:1.2rem; font-weight:800; margin-top:2px; }
+  .actions{ display:flex; flex-direction:column; gap:9px; width:100%; max-width:260px; }
+
+  .helpline{ text-align:center; color:var(--muted); font-size:.8rem; margin-top:12px; line-height:1.6; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <a class="home" href="../">← 게임 랩</a>
+    <span class="badge">🏗️ 탑 쌓기</span>
+    <span style="width:56px"></span>
+  </div>
+
+  <main class="game">
+    <div class="stage" id="stage">
+      <canvas id="cv"></canvas>
+      <div class="score" id="score">0</div>
+      <div class="combo" id="combo">PERFECT!</div>
+
+      <div class="overlay" id="startOverlay">
+        <h2>🏗️ 탑 쌓기</h2>
+        <p>움직이는 블록을 <b>탭</b>해서 떨어뜨리세요.<br>
+           삐끗한 만큼 잘려나가고, <b>정확히 겹치면 PERFECT</b> —<br>연속 PERFECT면 블록이 조금씩 회복됩니다.</p>
+        <p id="startBest" class="muted"></p>
+        <button class="btn btn-primary" id="startBtn">탭해서 시작</button>
+      </div>
+
+      <div class="overlay hidden" id="overOverlay">
+        <h2 id="overMsg">무너졌다! 🫠</h2>
+        <div class="big" id="overFloors">0층</div>
+        <div class="mystats" id="overStats"></div>
+        <div class="actions">
+          <button class="btn btn-primary" id="shareBtn">📤 기록 공유하기</button>
+          <button class="btn" id="retryBtn">🔄 다시 쌓기</button>
+          <a class="btn" href="../">🎮 다른 게임 보기</a>
+        </div>
+      </div>
+    </div>
+    <p class="helpline">한 판 30초 · 스페이스바로도 가능 · 속도는 점점 빨라집니다</p>
+  </main>
+
+  <script src="../share.js"></script>
+  <script src="../stats.js"></script>
+  <script>
+  /* =========================================================
+     탑 쌓기 — 원버튼 타이밍 아케이드
+     좌우로 움직이는 블록을 탭으로 낙하 → 겹친 부분만 남음.
+     오차 PERFECT_TOL 이내면 PERFECT(잘리지 않음, 연속 시 폭 +3 회복).
+     겹침 0이면 게임 오버. 점수 = 층수.
+     ========================================================= */
+  var BLOCK_H = 26;          // 층 높이
+  var PERFECT_TOL = 5;       // PERFECT 허용 오차(px)
+  var GROUND = 34;           // 바닥 여백
+  var GAME_ID = 'stack-tower';
+
+  var cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+  var stage=document.getElementById('stage');
+  var scoreEl=document.getElementById('score'), comboEl=document.getElementById('combo');
+  var W, H, dpr;
+
+  function resize(){
+    W = Math.min(456, stage.clientWidth);
+    H = 560;
+    dpr = window.devicePixelRatio || 1;
+    cv.width = W*dpr; cv.height = H*dpr;
+    cv.style.height = H+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+
+  var state='ready';         // ready | playing | over
+  var tower, current, pieces, floors, combo, cameraY, camTarget, recorded;
+
+  var INITIAL_W;
+  function reset(){
+    resize();
+    INITIAL_W = Math.round(W*0.52);
+    tower=[{ x:(W-INITIAL_W)/2, w:INITIAL_W, hue:168 }];
+    pieces=[]; floors=0; combo=0; cameraY=0; camTarget=0; recorded=false;
+    spawn();
+    scoreEl.textContent='0';
+  }
+
+  function hueOf(i){ return (168 + i*7) % 360; }
+
+  function spawn(){
+    var prev=tower[tower.length-1];
+    var fromLeft = tower.length % 2 === 1;
+    current={
+      w: prev.w,
+      x: fromLeft ? -prev.w*0.6 : W - prev.w*0.4,
+      dir: fromLeft ? 1 : -1,
+      speed: Math.min(5.6, 2.3 + floors*0.09),
+      hue: hueOf(tower.length)
+    };
+  }
+
+  // 블록의 화면 y (i = 층 인덱스, 0 = 바닥층)
+  function yOf(i){ return H - GROUND - (i+1)*BLOCK_H + cameraY; }
+
+  function drop(){
+    if(state!=='playing') return;
+    var prev=tower[tower.length-1];
+    var left=Math.max(current.x, prev.x);
+    var right=Math.min(current.x+current.w, prev.x+prev.w);
+    var overlap=right-left;
+
+    if(overlap<=0){                       // 완전히 빗나감 → 게임 오버
+      pieces.push({ x:current.x, w:current.w, y:yOf(tower.length), vy:0, hue:current.hue });
+      gameOver();
+      return;
+    }
+
+    var delta=Math.abs(current.x - prev.x);
+    if(delta<=PERFECT_TOL){               // PERFECT: 안 잘림 + 연속 시 회복
+      combo++;
+      var grow = combo>=2 ? 3 : 0;
+      var nw=Math.min(INITIAL_W, prev.w+grow);
+      tower.push({ x:prev.x-(nw-prev.w)/2, w:nw, hue:current.hue });
+      flashCombo(combo>=2 ? 'PERFECT ×'+combo+' (+폭 회복!)' : 'PERFECT!');
+    } else {
+      combo=0;
+      // 잘려나가는 조각
+      if(current.x<prev.x) pieces.push({ x:current.x, w:prev.x-current.x, y:yOf(tower.length), vy:0, hue:current.hue });
+      else pieces.push({ x:right, w:(current.x+current.w)-right, y:yOf(tower.length), vy:0, hue:current.hue });
+      tower.push({ x:left, w:overlap, hue:current.hue });
+    }
+
+    floors++;
+    scoreEl.textContent=floors;
+    // 카메라: 탑이 화면 55%를 넘으면 위로
+    var towerPix=(tower.length+1)*BLOCK_H + GROUND;
+    if(towerPix > H*0.55) camTarget = towerPix - H*0.55;
+    spawn();
+  }
+
+  function flashCombo(text){
+    comboEl.textContent=text;
+    comboEl.classList.add('show');
+    clearTimeout(flashCombo._t);
+    flashCombo._t=setTimeout(function(){ comboEl.classList.remove('show'); }, 700);
+  }
+
+  function gameOver(){
+    state='over';
+    if(!recorded){
+      recorded=true;
+      var st = window.GameStats ? GameStats.record(GAME_ID, { score: floors }) : {bestScore:floors, plays:1, streak:1, totalScore:floors};
+      var isBest = floors>0 && floors>=st.bestScore;
+      document.getElementById('overMsg').textContent = isBest && floors>=5 ? '최고 기록! 🎉' : '무너졌다! 🫠';
+      document.getElementById('overFloors').textContent = floors+'층';
+      document.getElementById('overStats').innerHTML =
+        '<div class="stat">🏆 최고<b>'+st.bestScore+'층</b></div>'+
+        '<div class="stat">Σ 누적<b>'+st.totalScore+'층</b></div>'+
+        '<div class="stat">🔥 연속<b>'+st.streak+'일</b></div>'+
+        '<div class="stat">🎮 플레이<b>'+st.plays+'판</b></div>';
+    }
+    setTimeout(function(){ document.getElementById('overOverlay').classList.remove('hidden'); }, 550);
+  }
+
+  /* ================= 루프 ================= */
+  function tick(){
+    // 이동
+    if(state==='playing'){
+      current.x += current.dir*current.speed;
+      if(current.x < -current.w*0.6){ current.x=-current.w*0.6; current.dir=1; }
+      if(current.x > W-current.w*0.4){ current.x=W-current.w*0.4; current.dir=-1; }
+    }
+    // 조각 낙하
+    for(var i=pieces.length-1;i>=0;i--){
+      pieces[i].vy+=0.55; pieces[i].y+=pieces[i].vy;
+      if(pieces[i].y>H+80) pieces.splice(i,1);
+    }
+    // 카메라
+    cameraY += (camTarget-cameraY)*0.12;
+
+    draw();
+    requestAnimationFrame(tick);
+  }
+
+  function block(x,y,w,hue,alpha){
+    ctx.globalAlpha=alpha==null?1:alpha;
+    ctx.fillStyle='hsl('+hue+',62%,52%)';
+    ctx.fillRect(x,y,w,BLOCK_H-2);
+    ctx.fillStyle='rgba(255,255,255,.14)';
+    ctx.fillRect(x,y,w,5);                       // 윗면 하이라이트
+    ctx.globalAlpha=1;
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    // 바닥(탑이 높아지면 카메라를 따라 아래로 스크롤됨)
+    var gy = H - GROUND + cameraY;
+    if(gy < H){
+      ctx.fillStyle='#1c2130';
+      ctx.fillRect(0, gy, W, H-gy);
+    }
+    // 탑
+    for(var i=0;i<tower.length;i++){
+      var y=yOf(i);
+      if(y>-BLOCK_H && y<H) block(tower[i].x, y, tower[i].w, tower[i].hue);
+    }
+    // 움직이는 블록
+    if(state==='playing') block(current.x, yOf(tower.length), current.w, current.hue);
+    // 잘린 조각
+    for(var j=0;j<pieces.length;j++) block(pieces[j].x, pieces[j].y, pieces[j].w, pieces[j].hue, .8);
+  }
+
+  /* ================= 입력/상태 ================= */
+  function start(){
+    reset();
+    state='playing';
+    document.getElementById('startOverlay').classList.add('hidden');
+    document.getElementById('overOverlay').classList.add('hidden');
+  }
+
+  stage.addEventListener('pointerdown', function(e){
+    if(e.target.closest('button')||e.target.closest('a')) return;   // 버튼은 제외
+    if(state==='playing'){ e.preventDefault(); drop(); }
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.code==='Space'||e.code==='Enter'){
+      if(state==='playing'){ e.preventDefault(); drop(); }
+      else if(state==='ready'){ e.preventDefault(); start(); }
+    }
+  });
+  document.getElementById('startBtn').onclick=start;
+  document.getElementById('startOverlay').addEventListener('pointerdown', function(e){
+    if(state==='ready'){ e.preventDefault(); start(); }   // 오버레이 아무 데나 탭해도 시작
+  });
+  document.getElementById('retryBtn').onclick=start;
+  document.getElementById('shareBtn').onclick=function(){
+    var st=window.GameStats?GameStats.get(GAME_ID):{bestScore:floors};
+    GameShare.share({
+      text:'🏗️ 탑 쌓기 — '+floors+'층! (최고 '+st.bestScore+'층)\n너도 쌓아봐 👇',
+      url:'https://junstellar.github.io/games/stack-tower/'
+    });
+  };
+
+  // 시작 화면에 최고기록 표시
+  (function(){
+    if(window.GameStats){
+      var st=GameStats.get(GAME_ID);
+      if(st.bestScore>0) document.getElementById('startBest').textContent='🏆 내 최고 기록: '+st.bestScore+'층';
+    }
+  })();
+
+  window.addEventListener('resize', function(){ if(state!=='playing'){ reset(); } });
+
+  reset();
+  tick();
+  </script>
+</body>
+</html>

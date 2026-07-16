@@ -25,6 +25,15 @@ window.GAMES = [
     status: "live",
     accent: "#2ea043"
   },
+  {
+    id: "stack-tower",
+    title: "탑 쌓기",
+    emoji: "🏗️",
+    desc: "움직이는 블록을 타이밍 맞춰 착착! 삐끗하면 잘려나가는 원버튼 아케이드. 몇 층까지 쌓을 수 있나요?",
+    tags: ["아케이드", "원버튼", "순발력"],
+    status: "live",
+    accent: "#f59e0b"
+  },
 
   // ▼▼▼ 새 게임은 여기 아래에 추가하세요 ▼▼▼
   // {
