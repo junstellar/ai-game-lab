@@ -148,6 +148,7 @@
       var grow = combo>=2 ? 3 : 0;
       var nw=Math.min(INITIAL_W, prev.w+grow);
       tower.push({ x:prev.x-(nw-prev.w)/2, w:nw, hue:current.hue });
+      flash={ i:tower.length-1, t:1 };
       flashCombo(combo>=2 ? 'PERFECT ×'+combo+' (+폭 회복!)' : 'PERFECT!');
     } else {
       combo=0;
@@ -204,37 +205,83 @@
     }
     // 카메라
     cameraY += (camTarget-cameraY)*0.12;
+    // PERFECT 플래시 감쇠
+    if(flash){ flash.t-=0.05; if(flash.t<=0) flash=null; }
 
     draw();
     requestAnimationFrame(tick);
   }
 
-  function block(x,y,w,hue,alpha){
-    ctx.globalAlpha=alpha==null?1:alpha;
-    ctx.fillStyle='hsl('+hue+',62%,52%)';
-    ctx.fillRect(x,y,w,BLOCK_H-2);
-    ctx.fillStyle='rgba(255,255,255,.14)';
-    ctx.fillRect(x,y,w,5);                       // 윗면 하이라이트
+  /* ---------- 렌더링 (2.5D) ---------- */
+  var DX=12, DY=9;          // 입체 깊이(오른쪽 위 방향)
+  var flash=null;           // PERFECT 화이트 플래시 { i, t }
+
+  function drawBlock(x,y,w,hue,alpha){
+    var h=BLOCK_H-2;
+    ctx.globalAlpha=(alpha==null?1:alpha);
+    // 윗면 (밝음)
+    ctx.fillStyle='hsl('+hue+',60%,68%)';
+    ctx.beginPath();
+    ctx.moveTo(x,y); ctx.lineTo(x+DX,y-DY); ctx.lineTo(x+w+DX,y-DY); ctx.lineTo(x+w,y);
+    ctx.closePath(); ctx.fill();
+    // 오른쪽 옆면 (어두움)
+    ctx.fillStyle='hsl('+hue+',56%,33%)';
+    ctx.beginPath();
+    ctx.moveTo(x+w,y); ctx.lineTo(x+w+DX,y-DY); ctx.lineTo(x+w+DX,y+h-DY); ctx.lineTo(x+w,y+h);
+    ctx.closePath(); ctx.fill();
+    // 앞면 (세로 그라데이션)
+    var g=ctx.createLinearGradient(0,y,0,y+h);
+    g.addColorStop(0,'hsl('+hue+',64%,56%)');
+    g.addColorStop(1,'hsl('+hue+',64%,45%)');
+    ctx.fillStyle=g;
+    ctx.fillRect(x,y,w,h);
+    ctx.fillStyle='rgba(255,255,255,.16)';
+    ctx.fillRect(x,y,w,2);
     ctx.globalAlpha=1;
   }
 
   function draw(){
-    ctx.clearRect(0,0,W,H);
-    // 바닥(탑이 높아지면 카메라를 따라 아래로 스크롤됨)
-    var gy = H - GROUND + cameraY;
-    if(gy < H){
-      ctx.fillStyle='#1c2130';
-      ctx.fillRect(0, gy, W, H-gy);
+    // 배경: 탑 높이에 따라 은은하게 색이 변하는 하늘
+    var topHue=hueOf(tower.length);
+    var bg=ctx.createLinearGradient(0,0,0,H);
+    bg.addColorStop(0,'hsl('+topHue+',30%,13%)');
+    bg.addColorStop(0.6,'#12141d');
+    bg.addColorStop(1,'#0f1115');
+    ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+
+    // 받침대(페데스탈) — 탑과 함께 스크롤
+    var base=tower[0];
+    var py=yOf(0)+BLOCK_H-2;
+    if(py<H+60){
+      ctx.fillStyle='#222839';
+      ctx.beginPath();
+      ctx.moveTo(base.x-18,py); ctx.lineTo(base.x-18+DX,py-DY);
+      ctx.lineTo(base.x+base.w+18+DX,py-DY); ctx.lineTo(base.x+base.w+18,py);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle='#191e2b';
+      ctx.fillRect(base.x-18,py,base.w+36,Math.max(0,Math.min(30,H-py)));
     }
-    // 탑
+
+    // 탑 (아래 → 위 순서로 그림)
     for(var i=0;i<tower.length;i++){
       var y=yOf(i);
-      if(y>-BLOCK_H && y<H) block(tower[i].x, y, tower[i].w, tower[i].hue);
+      if(y>-BLOCK_H-DY && y<H+BLOCK_H) drawBlock(tower[i].x, y, tower[i].w, tower[i].hue);
+    }
+    // PERFECT 플래시 (마지막으로 놓인 블록 위에 흰 빛)
+    if(flash && flash.t>0 && flash.i<tower.length){
+      var fb=tower[flash.i], fy=yOf(flash.i);
+      ctx.globalAlpha=flash.t*0.65;
+      ctx.fillStyle='#ffffff';
+      ctx.fillRect(fb.x,fy,fb.w,BLOCK_H-2);
+      ctx.globalAlpha=1;
     }
     // 움직이는 블록
-    if(state==='playing') block(current.x, yOf(tower.length), current.w, current.hue);
-    // 잘린 조각
-    for(var j=0;j<pieces.length;j++) block(pieces[j].x, pieces[j].y, pieces[j].w, pieces[j].hue, .8);
+    if(state==='playing') drawBlock(current.x, yOf(tower.length), current.w, current.hue);
+    // 잘린 조각 (떨어지며 흐려짐)
+    for(var j=0;j<pieces.length;j++){
+      var p=pieces[j];
+      drawBlock(p.x, p.y, p.w, p.hue, Math.max(.15, .85 - p.vy*0.05));
+    }
   }
 
   /* ================= 입력/상태 ================= */
