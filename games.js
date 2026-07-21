@@ -34,6 +34,15 @@ window.GAMES = [
     status: "live",
     accent: "#f472b6"
   },
+  {
+    id: "dodge",
+    title: "낙하 회피",
+    emoji: "🕹️",
+    desc: "쏟아지는 운석·폭탄을 좌우로 피하고 별을 먹어 점수 폭발! 갈수록 빨라지는 원핸드 액션.",
+    tags: ["액션", "회피", "순발력"],
+    status: "live",
+    accent: "#38bdf8"
+  },
 
   // ▼▼▼ 새 게임은 여기 아래에 추가하세요 ▼▼▼
   // {
