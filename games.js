@@ -43,6 +43,15 @@ window.GAMES = [
     status: "live",
     accent: "#38bdf8"
   },
+  {
+    id: "paper-hoop",
+    title: "종이 농구",
+    emoji: "🗑️",
+    desc: "구겨진 종이를 드래그로 조준해 휴지통에 골인! 바람이 부는 조준 물리 아케이드. 연속 골인 콤보!",
+    tags: ["아케이드", "조준", "물리"],
+    status: "live",
+    accent: "#a3a3a3"
+  },
 
   // ▼▼▼ 새 게임은 여기 아래에 추가하세요 ▼▼▼
   // {
