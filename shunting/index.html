@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>조차장 — 화차 편성 퍼즐 | AI 게임 랩</title>
+<meta name="description" content="입환 기관차로 화차를 밀고 당겨 지정된 순서로 열차를 편성하세요. 떠 있는 디오라마로 그려낸 3D 조차장 퍼즐 — 인상선 3량 제한, 측선은 후입선출. AI 코딩으로 만든 무료 브라우저 게임.">
+<meta name="keywords" content="조차장, 입환, 화차 편성, 철도 퍼즐, 3D 브라우저 게임, 디오라마, AI 코딩, 바이브 코딩, 무료 게임">
+<meta name="theme-color" content="#0f1115">
+<meta property="og:title" content="조차장 — 화차 편성 퍼즐">
+<meta property="og:description" content="측선은 후입선출, 인상선은 3량까지. 밀고 당겨 열차를 순서대로 맞추는 3D 철도 퍼즐.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="../shared.css">
+<style>
+  html,body{ height:100%; overflow:hidden; overscroll-behavior:none; }
+  body{ background:#0b0e13; }
+  #app{ position:fixed; inset:0; }
+  #gl{ display:block; width:100%; height:100%; touch-action:none; outline:none; }
+  #ui-root{ position:absolute; inset:0; pointer-events:none;
+            padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  #ui-root > *{ pointer-events:auto; }
+
+  /* ── 부팅 화면 (SH.UI 준비 전까지) ───────────────────────────── */
+  #boot{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+         justify-content:center; gap:18px; background:#0b0e13; z-index:60;
+         transition:opacity .5s ease; font-family:-apple-system,"Segoe UI","Malgun Gothic",sans-serif; }
+  #boot.gone{ opacity:0; pointer-events:none; }
+  #boot .mark{ font-size:2.1rem; font-weight:800; letter-spacing:-.02em; color:#e8e2d6; }
+  #boot .mark small{ display:block; font-size:.72rem; font-weight:600; letter-spacing:.28em;
+                     color:#8a7f6d; margin-top:6px; text-transform:uppercase; }
+  #boot .bar{ width:180px; height:3px; border-radius:2px; background:#20242e; overflow:hidden; }
+  #boot .bar i{ display:block; height:100%; width:0%; border-radius:2px;
+                background:linear-gradient(90deg,#d99a26,#f0c08a); transition:width .28s ease; }
+  #boot .msg{ font-size:.78rem; color:#6f6759; min-height:1.2em; letter-spacing:.02em; }
+  #boot .err{ color:#e5534b; font-size:.8rem; max-width:80%; text-align:center; line-height:1.6; }
+
+  /* 저사양/미지원 안내 */
+  #nogl{ display:none; position:absolute; inset:0; z-index:70; background:#0b0e13; color:#e6e8ec;
+         flex-direction:column; align-items:center; justify-content:center; gap:14px; text-align:center; padding:24px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="gl"></canvas>
+  <div id="ui-root"></div>
+
+  <div id="boot">
+    <div class="mark">조차장<small>Shunting Yard</small></div>
+    <div class="bar"><i id="bootBar"></i></div>
+    <div class="msg" id="bootMsg">준비 중…</div>
+    <div class="err" id="bootErr"></div>
+  </div>
+
+  <div id="nogl">
+    <div style="font-size:2rem">🚂</div>
+    <p>이 브라우저에서는 3D(WebGL)를 사용할 수 없어요.<br>최신 크롬·사파리·엣지에서 열어주세요.</p>
+    <a class="btn" href="../">🎮 다른 게임 보기</a>
+  </div>
+</div>
+
+<script src="../share.js"></script>
+<script src="../stats.js"></script>
+<script src="vendor/three.min.js"></script>
+<script src="js/00-util.js"></script>
+<script src="js/10-textures.js"></script>
+<script src="js/15-materials.js"></script>
+<script src="js/20-geometry.js"></script>
+<script src="js/25-world.js"></script>
+<script src="js/30-render.js"></script>
+<script src="js/35-fx.js"></script>
+<script src="js/40-audio.js"></script>
+<script src="js/50-puzzle.js"></script>
+<script src="js/55-levels.js"></script>
+<script src="js/60-motion.js"></script>
+<script src="js/70-input.js"></script>
+<script src="js/80-ui.js"></script>
+<script src="js/90-game.js"></script>
+<script>
+  (function(){
+    // WebGL 지원 확인 — 없으면 안내 화면
+    var ok=false;
+    try{ var c=document.createElement('canvas');
+         ok=!!(c.getContext('webgl2')||c.getContext('webgl')); }catch(e){}
+    if(!ok){ document.getElementById('boot').style.display='none';
+             document.getElementById('nogl').style.display='flex'; return; }
+    if(window.SH && SH.Game && SH.Game.boot){
+      SH.Game.boot(document.getElementById('gl'));
+    }else{
+      document.getElementById('bootErr').textContent='게임 모듈을 불러오지 못했습니다.';
+    }
+  })();
+</script>
+</body>
+</html>
