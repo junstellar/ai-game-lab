@@ -52,6 +52,15 @@ window.GAMES = [
     status: "live",
     accent: "#a3a3a3"
   },
+  {
+    id: "space-merge",
+    title: "우주 진화",
+    emoji: "🪐",
+    desc: "같은 천체끼리 합쳐 진화! 먼지에서 은하까지 — 연쇄 병합 🔥ON FIRE, 데일리 챌린지, 보관 슬롯.",
+    tags: ["퍼즐", "병합", "최고점"],
+    status: "live",
+    accent: "#7c5cff"
+  },
 
   // ▼▼▼ 새 게임은 여기 아래에 추가하세요 ▼▼▼
   // {

@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>우주 진화 — AI 게임 랩</title>
+<meta name="description" content="먼지에서 은하까지! 같은 천체를 합쳐 진화시키는 낙하 병합 퍼즐. 연쇄 병합 ON FIRE, 데일리 챌린지, 보관 슬롯. AI 코딩(바이브 코딩)으로 만든 무료 브라우저 게임.">
+<meta name="keywords" content="우주 진화, 병합 게임, 수박게임, 합치기 퍼즐, 낙하 퍼즐, AI 코딩, 바이브 코딩, 무료 브라우저 게임">
+<link rel="stylesheet" href="../shared.css">
+<style>
+  .topbar{ display:flex; align-items:center; justify-content:space-between; padding:14px 18px; max-width:560px; margin:0 auto; }
+  .topbar .home{ font-size:.85rem; color:var(--muted); }
+  .iconbtn{ background:none; border:none; cursor:pointer; font-size:1.15rem; line-height:1; color:var(--muted); padding:4px; width:56px; text-align:right; }
+  .game{ max-width:460px; margin:0 auto; padding:2px 12px 40px; }
+  .stage{ position:relative; width:100%; border-radius:var(--radius); overflow:hidden; border:1px solid var(--border); box-shadow:0 12px 34px rgba(0,0,0,.28); }
+  canvas{ display:block; width:100%; touch-action:none; cursor:pointer; }
+
+  .hud{ position:absolute; top:10px; left:12px; right:12px; display:flex; justify-content:space-between; align-items:flex-start; pointer-events:none; font-weight:800; }
+  .hud .score{ font-size:1.6rem; color:#eaf0ff; text-shadow:0 2px 6px rgba(0,0,0,.6); }
+  .toastc{ position:absolute; top:26%; left:0; right:0; text-align:center; pointer-events:none; font-size:1.05rem; font-weight:800; color:#ffd36e; opacity:0; transform:translateY(-4px) scale(.96); transition:opacity .14s, transform .14s; text-shadow:0 2px 8px rgba(0,0,0,.8); }
+  .toastc.show{ opacity:1; transform:translateY(0) scale(1); }
+
+  .overlay{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:11px; background:rgba(8,10,24,.82); backdrop-filter:blur(3px); text-align:center; padding:18px; }
+  .overlay h2{ margin:0; font-size:1.5rem; }
+  .overlay p{ margin:0; color:#d8dcf0; font-size:.88rem; line-height:1.6; }
+  .overlay .big{ font-size:3rem; font-weight:800; margin:2px 0; }
+  .hidden{ display:none !important; }
+  .mystats{ display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; max-width:300px; margin:2px auto 4px; }
+  .mystats .stat{ background:rgba(26,29,46,.9); border:1px solid var(--border); border-radius:10px; padding:8px; font-size:.8rem; color:var(--muted); }
+  .mystats .stat b{ display:block; color:var(--text); font-size:1.2rem; font-weight:800; margin-top:2px; }
+  .actions{ display:flex; flex-direction:column; gap:8px; width:100%; max-width:270px; }
+  .btnrow{ display:flex; gap:8px; } .btnrow .btn{ flex:1; }
+  .helpline{ text-align:center; color:var(--muted); font-size:.8rem; margin-top:12px; line-height:1.6; }
+  .badges{ display:flex; flex-wrap:wrap; gap:5px; justify-content:center; max-width:320px; margin:2px auto; }
+  .badges span{ font-size:.72rem; background:rgba(160,140,255,.14); border:1px solid rgba(160,140,255,.4); color:#c9b6ff; border-radius:999px; padding:3px 9px; }
+  .settings{ display:flex; flex-direction:column; gap:8px; align-items:center; }
+  .seg{ display:inline-flex; border:1px solid var(--border); border-radius:999px; overflow:hidden; background:rgba(20,22,38,.6); }
+  .seg button{ background:none; border:none; color:var(--muted); font-size:.8rem; font-weight:700; padding:6px 13px; cursor:pointer; }
+  .seg button.on{ background:var(--primary,#7c5cff); color:#fff; }
+  .seglabel{ font-size:.72rem; color:var(--muted); margin-right:4px; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <a class="home" href="../">← 게임 랩</a>
+    <span class="badge">🪐 우주 진화</span>
+    <button class="iconbtn" id="muteBtn" title="소리 켜기/끄기">🔊</button>
+  </div>
+
+  <main class="game">
+    <div class="stage" id="stage">
+      <canvas id="cv"></canvas>
+      <div class="hud hidden"><span class="score" id="score">0</span></div>
+      <div class="toastc" id="toast"></div>
+
+      <div class="overlay" id="startOverlay">
+        <h2>🪐 우주 진화</h2>
+        <p><b>탭해서 천체를 떨어뜨리세요.</b> 같은 것끼리 닿으면 <b>합쳐지며 진화</b>합니다.<br>
+           ✨먼지 → ☄️운석 → 🌑달 → 🌍지구 → 🪐토성 → ⭐항성 → 🌌은하<br>
+           <b>연쇄로 합치면 🔥ON FIRE</b>(2배)! 위로 넘치면 끝.<br>
+           <b>보관(H)</b> 한 칸에 넣어뒀다 나중에 쓸 수 있어요.</p>
+        <div class="settings">
+          <div><span class="seglabel">모드</span>
+            <span class="seg" id="segMode"><button data-v="endless" class="on">♾️ 무한</button><button data-v="daily">📅 데일리</button></span>
+          </div>
+          <div><span class="seglabel">난이도</span>
+            <span class="seg" id="segDiff"><button data-v="easy">이지</button><button data-v="normal" class="on">노멀</button><button data-v="hard">하드 (3개 합체)</button></span>
+          </div>
+          <p id="diffHint" class="muted" style="font-size:.75rem;margin-top:-2px">노멀: 같은 천체 <b>2개</b>가 닿으면 합체</p>
+          <div><span class="seglabel">테마</span>
+            <span class="seg" id="segSkin"><button data-v="night" class="on">🌌 딥스페이스</button><button data-v="day">🌅 성운</button></span>
+          </div>
+        </div>
+        <p id="startBest" class="muted"></p>
+        <button class="btn btn-primary" id="startBtn">탭해서 시작</button>
+      </div>
+
+      <div class="overlay hidden" id="overOverlay">
+        <h2 id="overMsg">우주가 넘쳤다! 🌌</h2>
+        <div class="big" id="overScore">0점</div>
+        <p id="overBest" class="muted"></p>
+        <div class="mystats" id="overStats"></div>
+        <div class="badges" id="overBadges"></div>
+        <div class="actions">
+          <div class="btnrow">
+            <button class="btn btn-primary" id="shareBtn">📤 공유</button>
+            <button class="btn" id="cardBtn">🖼️ 이미지</button>
+          </div>
+          <button class="btn btn-primary" id="retryBtn">🔄 다시 하기</button>
+          <a class="btn" href="../">🎮 다른 게임 보기</a>
+        </div>
+      </div>
+    </div>
+    <p class="helpline">탭/드래그로 위치 조절 후 놓기 · 같은 천체끼리 합체 · H로 보관 · 연쇄로 🔥ON FIRE</p>
+  </main>
+
+  <script src="../share.js"></script>
+  <script src="../stats.js"></script>
+  <script>
+  /* =========================================================
+     우주 진화 (Space Merge) — 낙하 병합 퍼즐
+     · 같은 등급 천체가 닿으면 합쳐지며 한 단계 진화
+     · 연쇄 병합 → ON FIRE(2배) / 데일리 시드 / 보관 슬롯
+     · 원-원 충돌 반복 해소(임펄스) 물리, 로컬 GPU 아트
+     ========================================================= */
+  var GAME_ID='space-merge';
+  var cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+  var stage=document.getElementById('stage');
+  var scoreEl=document.getElementById('score'), toastEl=document.getElementById('toast');
+  var W,H,dpr, GRAV=0.42, WALL=10, TOPLINE=92, FLOOR, HUD_H=52;
+
+  var reduceMotion=false;
+  try{ reduceMotion=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){}
+  var mode='endless', skin='night', diff='normal';
+  /* 난이도: rs=천체 크기 배율(클수록 통이 빨리 참), hCut=통 높이 축소, dist=낙하 분포
+     시뮬레이션 기준(무작위 플레이): 이지 ~97회 / 노멀 ~58회 / 하드 ~42회 만에 종료 */
+  var DIFFS={
+    easy:   { rs:1.00, hCut:0,  dist:'small', mergeN:2 },
+    normal: { rs:1.09, hCut:40, dist:'small', mergeN:2 },
+    hard:   { rs:1.18, hCut:40, dist:'flat',  mergeN:3 }   // 하드는 3개가 붙어야 합체
+  };
+  var BASE_F=null;   // 원본 비율 보관(난이도 배율의 기준)
+
+  /* 진화 단계: 반지름·점수·색상(이미지 없을 때 폴백) */
+  /* f = 화면 폭 대비 반지름 비율(반응형). resize()에서 r로 환산 */
+  var TIERS=[
+    /* 증가율을 √2(면적보존)에 가깝게 → 합쳐도 공간이 잘 안 생겨 통이 실제로 찬다 */
+    {n:'먼지',   f:0.049, s:1,   c1:'#cfd6e6', c2:'#8a93ad', img:'01_dust'},
+    {n:'운석',   f:0.066, s:3,   c1:'#b9a48c', c2:'#6d5a45', img:'02_meteor'},
+    {n:'소행성', f:0.087, s:6,   c1:'#b0906f', c2:'#6b4f35', img:'03_asteroid'},
+    {n:'달',     f:0.112, s:10,  c1:'#e6e9f0', c2:'#9aa1b3', img:'04_moon'},
+    {n:'화성',   f:0.139, s:16,  c1:'#e8875a', c2:'#9c3f22', img:'05_mars'},
+    {n:'지구',   f:0.166, s:26,  c1:'#5ab0e8', c2:'#1c5f96', img:'06_earth'},
+    {n:'목성',   f:0.194, s:40,  c1:'#f0d6a8', c2:'#b08a52', img:'07_gas'},
+    {n:'토성',   f:0.222, s:60,  c1:'#f5e2a8', c2:'#c0a259', img:'08_ringed'},
+    {n:'갈색왜성',f:0.244,s:90,  c1:'#ff7ab0', c2:'#8e2350', img:'09_dwarf'},
+    {n:'항성',   f:0.263, s:140, c1:'#fff3b0', c2:'#f0a020', img:'10_star'},
+    {n:'은하',   f:0.279, s:260, c1:'#c9b6ff', c2:'#5b3fa8', img:'11_galaxy'}
+  ];
+  var DROPMAX=4;   // 새로 떨어지는 건 0~3단계까지만
+
+  /* 이미지 로딩(있으면 사용) */
+  var IMGS={}, imgReady={};
+  (function(){ for(var i=0;i<TIERS.length;i++){ (function(t){
+      var im=new Image(); im.onload=function(){ imgReady[t.img]=true; }; im.onerror=function(){ imgReady[t.img]=false; };
+      im.src='img/'+t.img+'.webp'; IMGS[t.img]=im; })(TIERS[i]); } })();
+
+  function resize(){
+    if(!BASE_F){ BASE_F=[]; for(var b=0;b<TIERS.length;b++) BASE_F[b]=TIERS[b].f; }
+    var D=DIFFS[diff]||DIFFS.normal;
+    W=Math.min(420, stage.clientWidth||420); H=Math.round(W*1.32)-D.hCut; FLOOR=H-12;
+    for(var i=0;i<TIERS.length;i++){ TIERS[i].f=BASE_F[i]*D.rs; TIERS[i].r=Math.round(W*TIERS[i].f); }
+    // 상단: HUD 띠(HUD_H) + 대기 천체 자리 → 겹치지 않게 상단선 배치
+    TOPLINE = HUD_H + TIERS[DROPMAX-1].r*2 + 14;
+    dpr=window.devicePixelRatio||1;
+    cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+
+  /* ---------- 사운드 ---------- */
+  var Snd=(function(){
+    var ac=null, master=null, vol=0.5;
+    function init(){ if(ac) return; try{ var AC=window.AudioContext||window.webkitAudioContext; ac=new AC();
+      master=ac.createGain(); master.gain.value=vol; master.connect(ac.destination);}catch(e){ac=null;} }
+    function resume(){ if(ac&&ac.state==='suspended') ac.resume(); }
+    function tone(f0,f1,dur,type,g){ if(!ac)return; var t=ac.currentTime,o=ac.createOscillator(),gg=ac.createGain();
+      o.type=type||'sine'; o.frequency.setValueAtTime(f0,t); if(f1&&f1!==f0) o.frequency.exponentialRampToValueAtTime(Math.max(1,f1),t+dur);
+      gg.gain.setValueAtTime(0.0001,t); gg.gain.exponentialRampToValueAtTime(g||0.3,t+0.008); gg.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+      o.connect(gg); gg.connect(master); o.start(t); o.stop(t+dur+0.03); }
+    function noise(dur,g,f0,f1,q){ if(!ac)return; var t=ac.currentTime,n=Math.floor(ac.sampleRate*dur);
+      var buf=ac.createBuffer(1,n,ac.sampleRate),d=buf.getChannelData(0);
+      for(var i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n);
+      var src=ac.createBufferSource(); src.buffer=buf;
+      var bp=ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.setValueAtTime(f0||1200,t);
+      if(f1) bp.frequency.exponentialRampToValueAtTime(f1,t+dur); bp.Q.value=q||0.8;
+      var gg=ac.createGain(); gg.gain.setValueAtTime(g||0.3,t); gg.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+      src.connect(bp); bp.connect(gg); gg.connect(master); src.start(t); src.stop(t+dur+0.03); }
+    return { init:init, resume:resume, setVol:function(v){ vol=v; if(master) master.gain.value=v; },
+      drop:function(){ tone(300,180,0.07,'sine',0.14); },
+      merge:function(tier,chain){ var f=220+tier*70+Math.min(6,chain)*40; tone(f,f*1.6,0.13,'triangle',0.2);
+        setTimeout(function(){ tone(f*1.5,f*2.0,0.10,'sine',0.13); },55); },
+      bigmerge:function(){ noise(0.4,0.2,600,2600,0.7); tone(160,520,0.3,'sawtooth',0.18); },
+      fire:function(){ tone(300,900,0.25,'sawtooth',0.2); setTimeout(function(){ noise(0.3,0.18,900,3000,0.6); },40); },
+      over:function(){ tone(300,90,0.5,'sawtooth',0.16); }
+    };
+  })();
+
+  /* ---------- 상태 ---------- */
+  var state='ready';   // ready | play | over
+  var balls, next2, holdTier, holdUsed, cursorX, dropCool, score, best, recorded;
+  var heat, onFire, fireDrops, chain, chainT;
+  var particles, popups, shake, frame=0, overT, stars;
+  var drng=Math.random;
+  function rnd(){ return mode==='daily'? drng() : Math.random(); }
+  function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; var t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+
+  function newTier(){ var r=rnd();
+    return (DIFFS[diff]||DIFFS.normal).dist==='flat'
+      ? (r<0.28?0 : r<0.54?1 : r<0.78?2 : 3)     // 큰 것이 자주 나와 더 빡셈
+      : (r<0.36?0 : r<0.68?1 : r<0.88?2 : 3);
+  }
+
+  function reset(){
+    resize();
+    if(mode==='daily'){ var d=new Date(); drng=mulberry32(d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate()); }
+    balls=[]; next2=[newTier(),newTier()]; holdTier=null; holdUsed=false;
+    cursorX=W/2; dropCool=0; score=0; recorded=false;
+    heat=0; onFire=false; fireDrops=0; chain=0; chainT=0;
+    particles=[]; popups=[]; shake=0; overT=0;
+    stars=[]; for(var i=0;i<64;i++) stars.push({x:Math.random()*1,y:Math.random()*1,r:Math.random()*1.3+0.3,tw:Math.random()*6.28});
+    var st=window.GameStats?GameStats.get(GAME_ID):{bestScore:0}; best=st.bestScore||0;
+    updateHud();
+  }
+  function updateHud(){ scoreEl.textContent=score; }
+  function toast(t,c){ toastEl.textContent=t; toastEl.style.color=c||'#ffd36e'; toastEl.classList.add('show');
+    clearTimeout(toast._t); toast._t=setTimeout(function(){ toastEl.classList.remove('show'); },850); }
+
+  /* ---------- 물리 ---------- */
+  function addBall(tier,x,y,vx,vy){
+    var t=TIERS[tier];
+    balls.push({ t:tier, x:x, y:y, vx:vx||0, vy:vy||0, r:t.r, rot:(rnd()*2-1)*0.4, vr:(rnd()*2-1)*0.05,
+                 born:frame, pop:1, merged:false, rest:0 });
+    return balls[balls.length-1];
+  }
+  function drop(){
+    if(dropCool>0 || state!=='play') return;
+    var t=next2.shift(); next2.push(newTier());
+    var r=TIERS[t].r, x=Math.min(W-WALL-r, Math.max(WALL+r, cursorX));
+    addBall(t, x, TOPLINE-r-6, 0, 1.2);
+    dropCool=16; holdUsed=false; Snd.drop();
+    if(onFire){ fireDrops--; if(fireDrops<=0){ onFire=false; heat=0; } }
+  }
+  function doHold(){
+    if(state!=='play' || holdUsed) return;
+    if(holdTier===null){ holdTier=next2.shift(); next2.push(newTier()); }
+    else { var tmp=holdTier; holdTier=next2[0]; next2[0]=tmp; }
+    holdUsed=true; Snd.drop();
+  }
+
+  function physics(){
+    var i,j,a,b;
+    // 적분
+    for(i=0;i<balls.length;i++){ a=balls[i];
+      a.vy+=GRAV; a.vx*=0.995; a.vy*=0.999;
+      a.x+=a.vx; a.y+=a.vy; a.rot+=a.vr; a.vr*=0.97;
+      if(a.pop>0) a.pop-=0.08;
+      // 벽/바닥
+      if(a.x-a.r<WALL){ a.x=WALL+a.r; a.vx=Math.abs(a.vx)*0.42; }
+      if(a.x+a.r>W-WALL){ a.x=W-WALL-a.r; a.vx=-Math.abs(a.vx)*0.42; }
+      if(a.y+a.r>FLOOR){ a.y=FLOOR-a.r; if(a.vy>0){ a.vy*=-0.22; if(Math.abs(a.vy)<1.2) a.vy=0; } a.vx*=0.86; }
+    }
+    // 충돌 해소(여러 번 반복해 안정화) + 병합 수집
+    var mergePairs=[], touchEdges=[];
+    for(var it=0; it<4; it++){
+      for(i=0;i<balls.length;i++){ for(j=i+1;j<balls.length;j++){
+        a=balls[i]; b=balls[j]; if(a.merged||b.merged) continue;
+        var dx=b.x-a.x, dy=b.y-a.y, d2=dx*dx+dy*dy, mn=a.r+b.r;
+        if(d2>=mn*mn || d2===0) continue;
+        var d=Math.sqrt(d2), nx=dx/d, ny=dy/d, ov=mn-d;
+        // 같은 등급 맞닿음 → 후보 간선으로 수집(최고 단계는 병합 없음)
+        if(it===0 && a.t===b.t && a.t<TIERS.length-1){ touchEdges.push([i,j]); }
+        // 분리(질량=면적 비례)
+        var ma=a.r*a.r, mb=b.r*b.r, tot=ma+mb;
+        a.x-=nx*ov*(mb/tot); a.y-=ny*ov*(mb/tot);
+        b.x+=nx*ov*(ma/tot); b.y+=ny*ov*(ma/tot);
+        // 반발
+        var rvx=b.vx-a.vx, rvy=b.vy-a.vy, vn=rvx*nx+rvy*ny;
+        if(vn<0){ var e=0.12, imp=-(1+e)*vn/(1/ma+1/mb);
+          a.vx-=imp*nx/ma; a.vy-=imp*ny/ma; b.vx+=imp*nx/mb; b.vy+=imp*ny/mb; }
+      } }
+    }
+    /* 맞닿은 동급 덩어리(연결 요소)를 찾아 필요 개수(MERGE_N) 이상이면 병합.
+       하드=3개, 그 외=2개. union-find로 그룹핑. */
+    if(touchEdges.length){
+      var need=(DIFFS[diff]||DIFFS.normal).mergeN||2;
+      var parent={};
+      function find(x){ while(parent[x]!==x){ parent[x]=parent[parent[x]]; x=parent[x]; } return x; }
+      function uni(x,y){ var rx=find(x), ry=find(y); if(rx!==ry) parent[rx]=ry; }
+      for(var ei=0; ei<touchEdges.length; ei++){ var e0=touchEdges[ei][0], e1=touchEdges[ei][1];
+        if(parent[e0]===undefined) parent[e0]=e0; if(parent[e1]===undefined) parent[e1]=e1; uni(e0,e1); }
+      var groups={};
+      for(var pk in parent){ var root=find(pk); (groups[root]=groups[root]||[]).push(balls[pk]); }
+      for(var gk in groups){ var grp=groups[gk];
+        if(grp.length>=need){ grp.sort(function(p,q){ return q.y-p.y; });   // 아래쪽 우선
+          mergePairs.push(grp.slice(0, need)); }
+      }
+    }
+    // 병합 처리
+    if(mergePairs.length){
+      for(var k=0;k<mergePairs.length;k++){
+        var grp2=mergePairs[k], mx=0, my=0, svx=0, svy=0, gone=false;
+        for(var gi=0; gi<grp2.length; gi++){ var g=grp2[gi];
+          if(balls.indexOf(g)<0){ gone=true; break; }      // 이미 다른 그룹에서 소모됨
+          mx+=g.x; my+=g.y; svx+=g.vx; svy+=g.vy; }
+        if(gone) continue;
+        mx/=grp2.length; my/=grp2.length;
+        var nt=grp2[0].t+1;
+        for(var gj=0; gj<grp2.length; gj++){ var idx=balls.indexOf(grp2[gj]); if(idx>=0) balls.splice(idx,1); }
+        var nb=addBall(nt, mx, my, svx/grp2.length*0.3, svy/grp2.length*0.3 - 1.2);
+        nb.pop=1;
+        // 3개 합체는 재료가 더 드니 점수도 비례해서 높게
+        var gain=TIERS[nt].s * (grp2.length/2) * (onFire?2:1) * (1+Math.min(5,chain)*0.25);
+        score += Math.round(gain);
+        chain++; chainT=42;
+        spawnBurst(mx,my,TIERS[nt], nt>=6?22:12);
+        addPopup(mx,my-TIERS[nt].r-6, '+'+Math.round(gain), onFire?'#ff8a3a':TIERS[nt].c1);
+        Snd.merge(nt, chain);
+        if(nt>=7){ Snd.bigmerge(); shake=Math.max(shake, reduceMotion?0:7); toast('🌟 '+TIERS[nt].n+' 탄생!', TIERS[nt].c1); ach('tier'+nt); }
+        else if(chain>=2) toast('연쇄 ×'+chain+'!', '#ffd36e');
+        if(!onFire){ heat=Math.min(1, heat + 0.10 + nt*0.03);
+          if(heat>=1){ onFire=true; fireDrops=6; Snd.fire(); toast('🔥 ON FIRE! 2배 점수','#ff5a2a'); shake=Math.max(shake, reduceMotion?0:8); ach('onfire'); } }
+        if(navigator.vibrate && !reduceMotion) navigator.vibrate(nt>=6?26:10);
+      }
+      updateHud();
+    }
+    // 연쇄 타이머
+    if(chainT>0){ chainT--; if(chainT===0) chain=0; }
+    // 게임오버 판정: 상단선 위로 올라온 채 안정된 공이 지속되면
+    // 갓 떨어진 공은 유예(90프레임). 그 뒤에도 상단선 위에 머물면 = 통이 찼다
+    var over=false;
+    for(i=0;i<balls.length;i++){ a=balls[i];
+      if(frame-a.born>90 && a.y-a.r<TOPLINE){ over=true; break; } }
+    if(over){ overT++; if(overT>45) gameOver(); } else overT=Math.max(0,overT-1);
+  }
+
+  /* ---------- 파티클/팝업 ---------- */
+  function spawnBurst(x,y,tier,n){ if(reduceMotion) n=Math.min(n,5);
+    for(var i=0;i<n;i++){ var a=Math.random()*6.28, s=1.4+Math.random()*3.4;
+      particles.push({x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,g:0.06,life:1,dl:0.02+Math.random()*0.02,
+                      sz:1.6+Math.random()*3, col:Math.random()<0.5?tier.c1:tier.c2}); } }
+  function updateParticles(){ for(var i=particles.length-1;i>=0;i--){ var p=particles[i];
+      p.vy+=p.g; p.x+=p.vx; p.y+=p.vy; p.vx*=0.97; p.life-=p.dl; if(p.life<=0) particles.splice(i,1); } }
+  function drawParticles(){ for(var i=0;i<particles.length;i++){ var p=particles[i];
+      ctx.globalAlpha=Math.max(0,p.life); ctx.fillStyle=p.col; ctx.beginPath(); ctx.arc(p.x,p.y,p.sz,0,6.28); ctx.fill(); }
+    ctx.globalAlpha=1; }
+  function addPopup(x,y,txt,col){ popups.push({x:x,y:y,txt:txt,col:col,life:1}); }
+  function updatePopups(){ for(var i=popups.length-1;i>=0;i--){ var q=popups[i]; q.y-=0.7; q.life-=0.014; if(q.life<=0) popups.splice(i,1); } }
+  function drawPopups(){ ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.font='800 19px sans-serif';
+    for(var i=0;i<popups.length;i++){ var q=popups[i]; ctx.globalAlpha=Math.max(0,q.life);
+      ctx.lineWidth=3.5; ctx.strokeStyle='rgba(0,0,0,0.55)'; ctx.strokeText(q.txt,q.x,q.y); ctx.fillStyle=q.col; ctx.fillText(q.txt,q.x,q.y); }
+    ctx.globalAlpha=1; }
+
+  /* ---------- 업적 ---------- */
+  var ACH_NAMES={ tier7:'토성 도달 🪐', tier8:'갈색왜성 💗', tier9:'항성 탄생 ⭐', tier10:'은하 창조 🌌', onfire:'ON FIRE 🔥', chain4:'4연쇄 ⚡' };
+  function achStore(){ try{ return JSON.parse(localStorage.getItem('sm_ach')||'{}'); }catch(e){ return {}; } }
+  function ach(id){ if(!ACH_NAMES[id]) return; var s=achStore(); if(s[id]) return; s[id]=1;
+    try{ localStorage.setItem('sm_ach',JSON.stringify(s)); }catch(e){}
+    toast('🏅 업적: '+ACH_NAMES[id], '#c9b6ff'); }
+
+  function gameOver(){
+    if(state==='over') return;
+    state='over'; Snd.over();
+    if(!recorded){ recorded=true;
+      var st=window.GameStats?GameStats.record(GAME_ID,{score:score}):{bestScore:score,plays:1,streak:1,totalScore:score};
+      var isBest = score>0 && score>=st.bestScore;
+      var DLBL={easy:'이지',normal:'노멀',hard:'하드'};
+      document.getElementById('overMsg').textContent=(isBest?'최고 기록! 🎉':'우주가 넘쳤다! 🌌')+' · '+DLBL[diff]+(mode==='daily'?' · 📅데일리':'');
+      document.getElementById('overScore').textContent=score+'점';
+      var top=0; for(var i=0;i<balls.length;i++) if(balls[i].t>top) top=balls[i].t;
+      document.getElementById('overBest').textContent='최고 단계: '+TIERS[top].n;
+      document.getElementById('overStats').innerHTML=
+        '<div class="stat">🏆 최고<b>'+st.bestScore+'점</b></div>'+
+        '<div class="stat">Σ 누적<b>'+st.totalScore+'점</b></div>'+
+        '<div class="stat">🔥 연속<b>'+st.streak+'일</b></div>'+
+        '<div class="stat">🎮 플레이<b>'+st.plays+'판</b></div>';
+      var a=achStore(), bd=''; for(var kk in ACH_NAMES){ if(a[kk]) bd+='<span>'+ACH_NAMES[kk]+'</span>'; }
+      document.getElementById('overBadges').innerHTML=bd;
+    }
+    setTimeout(function(){ document.getElementById('overOverlay').classList.remove('hidden'); }, 600);
+  }
+
+  /* ---------- 루프 ---------- */
+  function tick(){
+    frame++;
+    if(state==='play'){ physics(); if(dropCool>0) dropCool--; }
+    updateParticles(); updatePopups();
+    shake = shake>0.2 ? shake*0.86 : 0;
+    draw();
+    requestAnimationFrame(tick);
+  }
+
+  /* ---------- 렌더 ---------- */
+  function rr(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+  function drawBody(b){
+    var t=TIERS[b.t], im=IMGS[t.img], sc=1+ (b.pop>0? b.pop*0.28 : 0);
+    ctx.save(); ctx.translate(b.x,b.y); ctx.rotate(b.rot); ctx.scale(sc,sc);
+    if(b.t>=8){ ctx.shadowColor=t.c1; ctx.shadowBlur=b.t>=9?26:16; }
+    if(imgReady[t.img] && im){
+      ctx.save(); ctx.beginPath(); ctx.arc(0,0,b.r,0,6.28); ctx.closePath(); ctx.clip();
+      ctx.drawImage(im, -b.r, -b.r, b.r*2, b.r*2); ctx.restore();
+    } else {
+      var g=ctx.createRadialGradient(-b.r*0.35,-b.r*0.35,b.r*0.15, 0,0,b.r);
+      g.addColorStop(0,t.c1); g.addColorStop(1,t.c2);
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,b.r,0,6.28); ctx.fill();
+      if(b.t===7){ ctx.strokeStyle='rgba(245,226,168,0.9)'; ctx.lineWidth=3;
+        ctx.beginPath(); ctx.ellipse(0,0,b.r*1.45,b.r*0.42,-0.4,0,6.28); ctx.stroke(); }
+    }
+    ctx.shadowBlur=0;
+    // 폴백(도형) 렌더일 때만 림/광택 — 이미지엔 이미 음영이 있어 링이 거품처럼 보임
+    if(!(imgReady[t.img] && im)){
+      ctx.strokeStyle='rgba(255,255,255,0.28)'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.arc(0,0,b.r-0.8,0,6.28); ctx.stroke();
+      var sg=ctx.createRadialGradient(-b.r*0.4,-b.r*0.45,b.r*0.1, 0,0,b.r);
+      sg.addColorStop(0,'rgba(255,255,255,0.20)'); sg.addColorStop(0.5,'rgba(255,255,255,0)');
+      ctx.fillStyle=sg; ctx.beginPath(); ctx.arc(0,0,b.r,0,6.28); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawScene(){
+    var night = skin==='night';
+    var g=ctx.createLinearGradient(0,0,0,H);
+    if(night){ g.addColorStop(0,'#070a1c'); g.addColorStop(0.6,'#0d1230'); g.addColorStop(1,'#141a3d'); }
+    else { g.addColorStop(0,'#2a1246'); g.addColorStop(0.55,'#4a1f52'); g.addColorStop(1,'#7a2f4e'); }
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // 성운
+    var neb=ctx.createRadialGradient(W*0.75,H*0.22,10, W*0.75,H*0.22, W*0.9);
+    neb.addColorStop(0, night?'rgba(90,70,200,0.20)':'rgba(255,120,90,0.22)'); neb.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=neb; ctx.fillRect(0,0,W,H);
+    var neb2=ctx.createRadialGradient(W*0.2,H*0.75,10, W*0.2,H*0.75, W*0.8);
+    neb2.addColorStop(0, night?'rgba(40,140,190,0.16)':'rgba(190,80,200,0.16)'); neb2.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=neb2; ctx.fillRect(0,0,W,H);
+    // 별
+    for(var i=0;i<stars.length;i++){ var s=stars[i], tw=0.55+0.45*Math.sin(frame*0.03+s.tw);
+      ctx.globalAlpha=tw*0.85; ctx.fillStyle='#fff';
+      ctx.beginPath(); ctx.arc(s.x*W, s.y*H, s.r, 0, 6.28); ctx.fill(); }
+    ctx.globalAlpha=1;
+    // 용기(벽/바닥)
+    ctx.strokeStyle= night?'rgba(150,170,255,0.35)':'rgba(255,200,220,0.35)'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(WALL-1,TOPLINE); ctx.lineTo(WALL-1,FLOOR+2); ctx.lineTo(W-WALL+1,FLOOR+2); ctx.lineTo(W-WALL+1,TOPLINE); ctx.stroke();
+    // 상단 경계선(위험선)
+    var danger = overT>0;
+    ctx.strokeStyle= danger? 'rgba(255,90,60,'+(0.5+0.4*Math.sin(frame*0.25))+')' : 'rgba(255,255,255,0.16)';
+    ctx.lineWidth=2; ctx.setLineDash([7,7]);
+    ctx.beginPath(); ctx.moveTo(WALL,TOPLINE); ctx.lineTo(W-WALL,TOPLINE); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  function miniOrb(cx,cy,rad,tier){
+    var t=TIERS[tier], im=IMGS[t.img];
+    if(imgReady[t.img]&&im){ ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,rad,0,6.28); ctx.clip();
+      ctx.drawImage(im,cx-rad,cy-rad,rad*2,rad*2); ctx.restore(); }
+    else { var g=ctx.createRadialGradient(cx-rad*0.35,cy-rad*0.35,rad*0.15,cx,cy,rad);
+      g.addColorStop(0,t.c1); g.addColorStop(1,t.c2); ctx.fillStyle=g;
+      ctx.beginPath(); ctx.arc(cx,cy,rad,0,6.28); ctx.fill(); }
+  }
+  function drawUI(){
+    // ── 상단 HUD 띠 (플레이 영역과 완전히 분리) ──
+    var g0=ctx.createLinearGradient(0,0,0,HUD_H);
+    g0.addColorStop(0,'rgba(6,8,22,0.92)'); g0.addColorStop(1,'rgba(6,8,22,0.55)');
+    ctx.fillStyle=g0; ctx.fillRect(0,0,W,HUD_H);
+
+    // 점수(좌) + 최고기록
+    ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    ctx.fillStyle='#eaf0ff'; ctx.font='800 26px sans-serif'; ctx.fillText(score, 14, 30);
+    if(best>0){ ctx.fillStyle='rgba(200,210,240,0.55)'; ctx.font='700 11px sans-serif'; ctx.fillText('🏆 '+best, 14, 44); }
+
+    // heat 게이지(중앙)
+    var gx=Math.round(W*0.30), gy=13, gw=Math.round(W*0.30), gh=7;
+    ctx.fillStyle='rgba(255,255,255,0.16)'; rr(gx,gy,gw,gh,4); ctx.fill();
+    var hgd=ctx.createLinearGradient(gx,0,gx+gw,0); hgd.addColorStop(0,'#ffcf5a'); hgd.addColorStop(1,'#ff4d2a');
+    ctx.fillStyle= onFire?'#ff4d2a':hgd; rr(gx,gy,gw*(onFire?1:heat),gh,4); ctx.fill();
+    ctx.textAlign='center'; ctx.font='800 11px sans-serif';
+    if(onFire){ ctx.fillStyle='#ff7a3a'; ctx.fillText('🔥 ON FIRE ×'+fireDrops, gx+gw/2, gy+gh+13); }
+    else if(chain>=2){ ctx.fillStyle='#ffd36e'; ctx.fillText('연쇄 ×'+chain, gx+gw/2, gy+gh+13); }
+
+    // NEXT / HOLD (우)
+    ctx.textAlign='right'; ctx.textBaseline='middle'; ctx.font='700 9px sans-serif';
+    ctx.fillStyle='rgba(200,210,240,0.6)';
+    ctx.fillText('NEXT', W-72, 16); ctx.fillText('HOLD', W-72, 38);
+    miniOrb(W-52, 16, 11, next2[0]); miniOrb(W-24, 16, 8, next2[1]);
+    if(holdTier!==null) miniOrb(W-52, 38, 11, holdTier);
+    else { ctx.strokeStyle='rgba(255,255,255,0.22)'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.arc(W-52,38,10,0,6.28); ctx.stroke(); }
+  }
+
+  function draw(){
+    var sx=0, sy=0; if(shake>0.2){ sx=(Math.random()*2-1)*shake; sy=(Math.random()*2-1)*shake; }
+    ctx.setTransform(dpr,0,0,dpr, sx*dpr, sy*dpr);
+    drawScene();
+
+    // 조준 가이드 + 대기 중인 천체
+    if(state==='play'){
+      var t=TIERS[next2[0]], r=t.r, gx2=Math.min(W-WALL-r, Math.max(WALL+r, cursorX));
+      ctx.strokeStyle='rgba(255,255,255,0.18)'; ctx.lineWidth=2; ctx.setLineDash([4,8]);
+      ctx.beginPath(); ctx.moveTo(gx2,TOPLINE); ctx.lineTo(gx2,FLOOR); ctx.stroke(); ctx.setLineDash([]);
+      if(dropCool<=0){ ctx.globalAlpha=0.95; miniOrb(gx2, TOPLINE-r-6, r, next2[0]); ctx.globalAlpha=1; }
+    }
+    for(var i=0;i<balls.length;i++) drawBody(balls[i]);
+    drawParticles();
+    if(onFire){ var tg=ctx.createRadialGradient(W/2,H/2,H*0.25,W/2,H/2,H*0.8);
+      tg.addColorStop(0,'rgba(255,60,20,0)'); tg.addColorStop(1,'rgba(255,60,20,0.18)'); ctx.fillStyle=tg; ctx.fillRect(0,0,W,H); }
+    drawPopups();
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    if(state==='play'||state==='over') drawUI();
+  }
+
+  /* ---------- 결과 이미지 카드 ---------- */
+  function makeCard(){
+    var c=document.createElement('canvas'); c.width=600; c.height=800; var x=c.getContext('2d');
+    var g=x.createLinearGradient(0,0,0,800); g.addColorStop(0,'#0a0f2a'); g.addColorStop(1,'#2a1a4a');
+    x.fillStyle=g; x.fillRect(0,0,600,800);
+    for(var i=0;i<80;i++){ x.globalAlpha=Math.random()*0.8+0.2; x.fillStyle='#fff';
+      x.beginPath(); x.arc(Math.random()*600,Math.random()*800,Math.random()*1.6,0,6.28); x.fill(); }
+    x.globalAlpha=1;
+    x.fillStyle='#c9b6ff'; x.font='800 40px sans-serif'; x.textAlign='center'; x.fillText('🪐 우주 진화', 300, 92);
+    x.fillStyle='#fff'; x.font='800 140px sans-serif'; x.fillText(score, 300, 300);
+    x.fillStyle='#a99fc0'; x.font='700 32px sans-serif'; x.fillText('점', 300, 350);
+    var top=0; for(var b=0;b<balls.length;b++) if(balls[b].t>top) top=balls[b].t;
+    var t=TIERS[top], cx=300, cy=470, rad=90;
+    var bg=x.createRadialGradient(cx-30,cy-30,10,cx,cy,rad); bg.addColorStop(0,t.c1); bg.addColorStop(1,t.c2);
+    x.fillStyle=bg; x.beginPath(); x.arc(cx,cy,rad,0,6.28); x.fill();
+    x.fillStyle='#eae6ff'; x.font='700 30px sans-serif'; x.fillText('최고 단계 — '+t.n, 300, 606);
+    var st=window.GameStats?GameStats.get(GAME_ID):{bestScore:score};
+    x.fillStyle='#8a80a0'; x.font='600 24px sans-serif';
+    x.fillText('🏆 최고 '+st.bestScore+'점'+(mode==='daily'?'  ·  📅 오늘의 도전':''), 300, 660);
+    x.fillStyle='#7a7090'; x.font='600 22px sans-serif'; x.fillText('junstellar.github.io/games/space-merge', 300, 762);
+    return c;
+  }
+  function shareCard(){
+    var c=makeCard();
+    c.toBlob(function(blob){ if(!blob) return;
+      var file=new File([blob],'space-merge.png',{type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        navigator.share({files:[file], text:'🪐 우주 진화 '+score+'점!'}).catch(function(){});
+      } else { var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='space-merge-'+score+'.png'; a.click();
+        setTimeout(function(){ URL.revokeObjectURL(a.href); },4000); }
+    },'image/png');
+  }
+
+  /* ---------- 입력 ---------- */
+  function start(){ Snd.init(); Snd.resume(); reset(); state='play';
+    document.getElementById('startOverlay').classList.add('hidden');
+    document.getElementById('overOverlay').classList.add('hidden'); }
+  function pt(e){ var r=cv.getBoundingClientRect(); return { x:(e.clientX-r.left)/r.width*W, y:(e.clientY-r.top)/r.height*H }; }
+
+  var pointerDown=false;
+  stage.addEventListener('pointerdown', function(e){
+    if(e.target.closest('button')||e.target.closest('a')) return; Snd.resume();
+    if(state==='play'){ pointerDown=true; cursorX=pt(e).x; e.preventDefault(); }
+  });
+  stage.addEventListener('pointermove', function(e){ if(state==='play'&&pointerDown){ cursorX=pt(e).x; } });
+  window.addEventListener('pointerup', function(){ if(pointerDown&&state==='play'){ pointerDown=false; drop(); } });
+  document.addEventListener('keydown', function(e){
+    if(state==='play'){
+      if(e.code==='ArrowLeft'){ cursorX=Math.max(WALL, cursorX-16); e.preventDefault(); }
+      else if(e.code==='ArrowRight'){ cursorX=Math.min(W-WALL, cursorX+16); e.preventDefault(); }
+      else if(e.code==='Space'||e.code==='ArrowDown'){ drop(); e.preventDefault(); }
+      else if(e.code==='KeyH'||e.code==='ArrowUp'){ doHold(); e.preventDefault(); }
+    } else if(e.code==='Space'||e.code==='Enter'){ e.preventDefault(); start(); }
+  });
+
+  function seg(id, cb){ var el=document.getElementById(id); el.addEventListener('click', function(e){ var b=e.target.closest('button'); if(!b)return;
+    var bs=el.getElementsByTagName('button'); for(var i=0;i<bs.length;i++) bs[i].classList.remove('on'); b.classList.add('on'); cb(b.getAttribute('data-v')); }); }
+  seg('segMode', function(v){ mode=v; }); seg('segSkin', function(v){ skin=v; });
+  seg('segDiff', function(v){ diff=v; reset();
+    var n=(DIFFS[v]||DIFFS.normal).mergeN, lbl={easy:'이지',normal:'노멀',hard:'하드'}[v];
+    document.getElementById('diffHint').innerHTML = lbl+': 같은 천체 <b>'+n+'개</b>가 닿으면 합체'+(n===3?' — 훨씬 어렵습니다':'');
+  });
+
+  document.getElementById('startBtn').onclick=start;
+  document.getElementById('retryBtn').onclick=start;
+  document.getElementById('cardBtn').onclick=shareCard;
+  document.getElementById('shareBtn').onclick=function(){
+    var st=window.GameStats?GameStats.get(GAME_ID):{bestScore:score};
+    var top=0; for(var i=0;i<balls.length;i++) if(balls[i].t>top) top=balls[i].t;
+    var DL={easy:'이지',normal:'노멀',hard:'하드'};
+    GameShare.share({ text:'🪐 우주 진화 — '+score+'점! (최고 단계: '+TIERS[top].n+' · '+DL[diff]+')'+(mode==='daily'?' 📅오늘의도전':'')+'\n너도 은하 만들어봐 👇', url:'https://junstellar.github.io/games/space-merge/' });
+  };
+  var muted=false;
+  document.getElementById('muteBtn').onclick=function(){ muted=!muted; Snd.init(); Snd.setVol(muted?0:0.5); this.textContent=muted?'🔇':'🔊'; };
+
+  (function(){ if(window.GameStats){ var st=GameStats.get(GAME_ID); if(st.bestScore>0) document.getElementById('startBest').textContent='🏆 내 최고 기록: '+st.bestScore+'점'; } })();
+  window.addEventListener('resize', function(){ if(state!=='play') reset(); });
+
+  reset(); tick();
+  </script>
+</body>
+</html>
