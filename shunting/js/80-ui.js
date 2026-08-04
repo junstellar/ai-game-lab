@@ -117,6 +117,11 @@ window.SH.UI = (function () {
   var labelsOwned = false;    // Game 이 UI.labels 를 부른 적이 있는가
   var lblRaf = 0, tutRaf = 0, tutPt = null, bubW = 0, bubH = 0;
   var tutLbl = null;          // 지금 튜토리얼이 가리키는 선로 이름표 id
+  var stripX = 0;             // 목표 스트립 왼쪽 모서리 — 편성 바의 고정 앵커
+  var cutPend = null;         // 눌렀지만 아직 결과가 안 나온 ✂ {k, n, x, t}
+  var cutT = 0;               // 대기 상태 만료 타이머
+  var partT = 0;              // '갈라지는 중' 창의 만료 시각 (편성이 0 이 될 때)
+  var tutSig = null, staleT = 0, coachStale = false;
   var TRACK_KO = { HEAD: '인상선', EXIT: '출발선', S1: '측선 1', S2: '측선 2', S3: '측선 3' };
   var _wpt = null;            // World.point 재사용 버퍼 (프레임당 할당 0)
 
@@ -164,17 +169,26 @@ window.SH.UI = (function () {
   }
   function pad2(n) { n = Math.max(0, Math.floor(n)); return (n < 10 ? '0' : '') + n; }
 
-  /* 레이어 표시/숨김 — 트랜지션이 끝난 뒤 display:none 으로 접근성 트리에서 제거 */
+  /* 레이어 표시/숨김 — 트랜지션이 끝난 뒤 display:none 으로 접근성 트리에서 제거.
+
+     ★ 퇴장 트랜지션 동안 pointer-events 를 즉시 끊는 것이 핵심이다.
+     전체 화면 레이어(.sh-win z60 / .sh-scrim z50 / .sh-rules z53)는 opacity 만 0 으로
+     내려도 display:none 이 붙기 전까지 **여전히 클릭을 먹는다**. 그래서 승리 → '다음 레벨'
+     직후 새 레벨의 튜토리얼 카드가 완전히 그려져 있는데도 탭이 사라졌다
+     (계측: elementFromPoint 가 '알겠어요' 대신 h2.sh-win-title 을 반환).
+     반대로 '등장' 중에는 일부러 아무것도 막지 않는다 — 보이기 시작하면 바로 눌린다. */
   function show(node, isOn, ms) {
     if (!node) return;
     clearTimeout(node.__ht);
     if (isOn) {
       node.style.display = '';
+      node.style.pointerEvents = '';         // 등장: 트랜지션 중에도 즉시 클릭 가능
       node.removeAttribute('aria-hidden');
       void node.offsetWidth;                 // reflow — 트랜지션 시작 보장
       node.classList.add('is-on');
     } else {
       node.classList.remove('is-on');
+      node.style.pointerEvents = 'none';     // 퇴장: 사라지는 동안 클릭을 훔치지 않는다
       node.setAttribute('aria-hidden', 'true');
       node.__ht = setTimeout(function () { node.style.display = 'none'; }, reduced() ? 0 : (ms || 380));
     }
@@ -941,9 +955,16 @@ window.SH.UI = (function () {
 /* ── B. 편성 바 (분리의 주 경로) ───────────────────────────────
    3D 상의 ~10px 연결기 구를 사냥하는 대신 여기서 자른다.
    ✂ 는 44×44 — 모바일에서 엄지로 확실히 눌린다. */
+/* ★ 정렬은 '가운데'가 아니라 **왼쪽(기관차) 고정**이다.
+   가운데 정렬이면 편성 길이가 바뀔 때마다 바 전체가 다시 가운데로 가면서
+   모든 ✂ 의 x 가 통째로 밀린다(실측: 2량→1량에서 45px, 모바일 아이콘 피치가 90px).
+   출발선에서 자동 연결로 칸 수가 바뀐 직후 같은 자리를 누르면 헛클릭이 났다.
+   --sh-consist-x 는 레벨 동안 고정된 왼쪽 앵커(목표 스트립의 왼쪽 모서리)라
+   기관차와 모든 ✂ 가 편성 길이와 무관하게 제자리를 지킨다. */
 '.sh-consist{ position:absolute; left:var(--sh-pad); right:var(--sh-pad); z-index:10;',
 '  bottom:calc(var(--sh-strip-h) + var(--sh-cluster-h,48px) + var(--sh-pad) + 22px);',
-'  margin-inline:auto; max-width:var(--sh-consist-w,560px); border-radius:16px;',
+'  margin-left:var(--sh-consist-x,0px); margin-right:auto;',
+'  max-width:var(--sh-consist-w,560px); border-radius:16px;',
 '  padding:6px 8px 7px; pointer-events:auto;',
 '  transform:translateY(0); opacity:1;',
 '  transition:transform .45s var(--sh-e), opacity .32s; }',
@@ -956,7 +977,8 @@ window.SH.UI = (function () {
 '.sh-consist-t b{ color:var(--sh-a2); font-weight:800; }',
 '.sh-consist-t b svg{ width:13px; height:13px; display:inline-block; vertical-align:-2px;',
 '  stroke-width:2.2; }',
-'.sh-consist-row{ display:flex; align-items:center; justify-content:center;',
+/* flex-start — 넘칠 때 왼쪽으로 스크롤이 되려면 center 면 안 된다(기관차가 잘린다) */
+'.sh-consist-row{ display:flex; align-items:center; justify-content:flex-start;',
 '  overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }',
 '.sh-consist-row::-webkit-scrollbar{ display:none; }',
 '.sh-cv{ flex:0 0 auto; width:var(--sh-cv-w,42px); }',
@@ -980,6 +1002,46 @@ window.SH.UI = (function () {
 '  border:2px solid rgba(242,196,118,.85); opacity:0; pointer-events:none; }',
 '.sh-cut.is-pulse::after{ animation:sh-ping 1.6s var(--sh-e) infinite; }',
 
+/* ── ✂ 피드백은 **결과에 연동**한다 ─────────────────────────────
+   예전에는 눌리기만 하면 앰버 링이 퍼지는 연출이 돌았다. 90-game.js 는 이동
+   애니메이션 중 들어온 분리를 큐에 담아 두고 나중에 실행하는데, 그 사이에도 같은
+   '성공' 연출이 재생돼서 테스터가 두 번 "게임이 고장났다"고 판단했다.
+   이제 세 결과가 서로 다른 언어를 쓴다:
+     is-wait : 예약됨      — 회색 다이얼 + 도는 호(성공 아님이 한눈에)
+     .sh-snip: 실제 분리됨 — 연결선이 좌우로 갈라진다
+     is-no   : 거부됨      — 짧은 흔들림, 링 없음 */
+'.sh-root .sh-cut.is-wait i{ color:rgba(255,240,219,.86);',
+'  background:linear-gradient(180deg,#6f665c,#48423b);',
+'  box-shadow:0 3px 10px -4px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.18),',
+'    inset 0 -1px 0 rgba(0,0,0,.35); transform:none; }',
+'.sh-cut.is-wait::before{ animation:sh-waitline 1.05s linear infinite; }',
+'@keyframes sh-waitline{ 0%,100%{opacity:.22} 50%{opacity:.85} }',
+'.sh-cut.is-wait::after{ opacity:1; animation:sh-spin .95s linear infinite;',
+'  border-color:rgba(242,196,118,.22); border-top-color:rgba(242,196,118,.95); }',
+'@keyframes sh-spin{ to{ transform:rotate(360deg) } }',
+'.sh-cut.is-no i{ animation:sh-nudge .34s var(--sh-e); }',
+'@keyframes sh-nudge{ 0%,100%{transform:translateX(0)} 22%{transform:translateX(-4px)}',
+'  62%{transform:translateX(4px)} }',
+/* 분리 성공 — 잘린 지점에서 연결선이 좌우로 갈라진다. 편성 바가 다시 그려져도
+   이 오버레이는 바(패널)에 붙어 있으므로 살아남는다. */
+/* cut(0) — 전부 내려놓아 바가 사라지기 직전, 갈라지는 걸 보여 주고 접는다 */
+'.sh-consist.is-parting .sh-consist-row{ opacity:.26; transform:translateX(8px);',
+'  transition:opacity .34s var(--sh-e), transform .34s var(--sh-e); }',
+'.sh-consist.is-parting{ pointer-events:none; }',
+'.sh-snip{ position:absolute; top:0; bottom:0; width:0; z-index:3; pointer-events:none; }',
+'.sh-snip i, .sh-snip b{ position:absolute; left:-1.3px; top:19%; bottom:9%; width:2.6px;',
+'  border-radius:1.3px; background:linear-gradient(180deg,rgba(246,205,133,0),#fff2da 40%,',
+'    #f6cd85 76%,rgba(246,205,133,0)); box-shadow:0 0 16px rgba(242,196,118,1),',
+'    0 0 4px rgba(255,244,222,.9); }',
+'.sh-snip i{ animation:sh-snip-w .44s var(--sh-e) forwards; }',
+'.sh-snip b{ animation:sh-snip-e .44s var(--sh-e) forwards; }',
+'@keyframes sh-snip-w{ 0%{transform:translateX(0) scaleY(.4); opacity:0}',
+'  22%{transform:translateX(0) scaleY(1); opacity:1}',
+'  100%{transform:translateX(-11px) scaleY(.72); opacity:0} }',
+'@keyframes sh-snip-e{ 0%{transform:translateX(0) scaleY(.4); opacity:0}',
+'  22%{transform:translateX(0) scaleY(1); opacity:1}',
+'  100%{transform:translateX(11px) scaleY(.72); opacity:0} }',
+
 /* ── F. 규칙 카드 ─────────────────────────────────────────────── */
 '.sh-rules{ position:fixed; inset:0; z-index:53; display:grid; place-items:center;',
 '  padding:16px; overflow:auto; opacity:0; pointer-events:auto;',
@@ -987,14 +1049,25 @@ window.SH.UI = (function () {
 '  -webkit-backdrop-filter:blur(5px) saturate(1.16); backdrop-filter:blur(5px) saturate(1.16);',
 '  transition:opacity .32s var(--sh-e); }',
 '.sh-rules.is-on{ opacity:1; }',
+/* ★ 카드는 '스크롤되는 상자' 하나가 아니라 [고정 헤더 + 스크롤 본문] 두 칸이다.
+   예전에는 카드 전체가 스크롤돼서 3번 항목을 보려고 내리면 우상단 X 가 같이
+   위로 밀려 사라졌다 — 원래 X 자리를 눌러도 아무 일이 없고(카드 본체가 잡힘)
+   맨 아래 '알겠어요'를 찾아야만 닫혔다. 이제 X 는 절대 화면 밖으로 나가지 않는다. */
 '.sh-root .sh-rules-card{ width:min(420px,100%); max-height:calc(100vh - 32px);',
-'  overflow-y:auto; -webkit-overflow-scrolling:touch; border-radius:20px;',
-'  padding:15px 17px 17px; background-color:rgba(14,17,22,.72);',
+'  display:flex; flex-direction:column; overflow:hidden; border-radius:20px;',
+'  padding:0; background-color:rgba(14,17,22,.72);',
 '  transform:translateY(14px) scale(.97); transition:transform .42s var(--sh-e); }',
 '.sh-rules.is-on .sh-rules-card{ transform:none; }',
-'.sh-rules-head{ display:flex; align-items:center; gap:10px; margin-bottom:3px; }',
+'.sh-rules-head{ flex:0 0 auto; position:relative; z-index:2;',
+'  display:flex; align-items:center; gap:10px; padding:14px 17px 11px;',
+'  border-bottom:1px solid transparent; transition:border-color .2s, box-shadow .2s; }',
+/* 본문이 헤더 밑으로 지나갈 때만 경계선이 켜진다 — 평소엔 판이 하나로 보인다 */
+'.sh-rules-head.is-scrolled{ border-bottom-color:rgba(255,255,255,.09);',
+'  box-shadow:0 10px 16px -14px rgba(0,0,0,.9); }',
 '.sh-rules-head h2{ margin:0; font-size:1.02rem; font-weight:800; letter-spacing:-.025em;',
 '  flex:1 1 auto; }',
+'.sh-rules-body{ flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain;',
+'  -webkit-overflow-scrolling:touch; padding:0 17px 17px; }',
 '.sh-rules-sub{ font-size:.72rem; font-weight:600; color:var(--sh-mut); margin:0 0 12px;',
 '  line-height:1.5; }',
 '.sh-rule{ display:flex; gap:10px; padding:11px 0; border-top:1px solid rgba(255,255,255,.07); }',
@@ -1041,6 +1114,19 @@ window.SH.UI = (function () {
 '  45%{ box-shadow:var(--sh-sh),var(--sh-hi),0 0 0 3px rgba(242,196,118,.55),',
 '    0 0 26px rgba(217,154,38,.5) } }',
 
+/* ── 코치 카드가 상태보다 늦을 때 ────────────────────────────────
+   90-game.js 는 이동이 **끝난 뒤에야** tutSync() 로 안내를 다시 고른다. 그런데
+   상태(수·편성·이름표)는 이동이 **시작될 때** 이미 바뀐다. 그 2~4초 동안 카드는
+   이미 끝난 단계를 계속 말하고, 손가락도 지난 선로를 계속 짚고 있었다.
+   그래서 상태가 어긋난 순간부터 카드를 흐리게 하고 포인터를 접는다 —
+   "네 조작은 접수됐고 지금 다시 보고 있다"가 읽힌다. 버튼은 계속 눌린다. */
+'.sh-coach-bub, .sh-coach-pt, .sh-coach-arw{',
+'  transition:opacity .22s var(--sh-e) .1s, filter .22s var(--sh-e) .1s; }',
+'.sh-coach.is-stale .sh-coach-bub{ opacity:.34; filter:saturate(.5); }',
+'.sh-coach.is-stale .sh-coach-pt, .sh-coach.is-stale .sh-coach-arw{ opacity:0; }',
+/* 사라지는 중인 레이어가 클릭을 훔치지 않게 — show() 의 인라인 처리와 이중 안전망 */
+'.sh-root [aria-hidden="true"]{ pointer-events:none !important; }',
+
 /* ── 버튼 클러스터: ? 와 줌 버튼이 늘어난다 ──────────────────── */
 '.sh-cluster{ flex-wrap:wrap; justify-content:flex-end; max-width:min(232px,64vw); }',
 '.sh-rb.sh-help{ color:var(--sh-a2); }',
@@ -1065,15 +1151,20 @@ window.SH.UI = (function () {
 '  .sh-consist{ left:74px; right:74px; bottom:calc(var(--sh-strip-h) + 14px); }',
 '  .sh-consist-t{ display:none; }',
 '  .sh-cluster{ max-width:none; }',
-'  .sh-rules-card{ padding:12px 14px 14px; }',
+'  .sh-rules-head{ padding:11px 14px 9px; }',
+'  .sh-rules-body{ padding:0 14px 14px; }',
 '  .sh-rule{ padding:8px 0; }',
 '}',
 '@media (prefers-reduced-motion: reduce){',
 '  .sh-lbl.is-pulse::before, .sh-lbl.is-tut::before, .sh-cut.is-pulse::after,',
+'  .sh-cut.is-wait::before, .sh-cut.is-wait::after, .sh-cut.is-no i,',
 '  .sh-strip.is-pulse, .sh-consist.is-pulse{ animation:none !important; }',
 '  .sh-lbl.is-pulse{ border-color:rgba(242,196,118,.95) !important; }',
 '  .sh-lbl.is-tut::before{ opacity:1; }',
 '  .sh-cut.is-pulse::after{ opacity:1; }',
+/* 모션을 줄여도 '예약됨'은 반드시 구분돼야 한다 — 회전 대신 정지한 호로 남긴다 */
+'  .sh-cut.is-wait::after{ opacity:1; }',
+'  .sh-cut.is-wait::before{ opacity:.85; }',
 '}',
 ''
   ].join('\n');
@@ -1408,8 +1499,10 @@ window.SH.UI = (function () {
     rules.setAttribute('role', 'dialog');
     rules.setAttribute('aria-modal', 'true');
     rules.setAttribute('aria-label', '게임 방법');
+    /* 헤더(제목 + X)는 스크롤 상자 **밖**이다 — 아무리 내려도 X 가 사라지지 않는다 */
     var rCard = el('div', 'sh-rules-card sh-glass',
       '<div class="sh-rules-head"><h2>게임 방법</h2></div>' +
+      '<div class="sh-rules-body">' +
       '<p class="sh-rules-sub">입환 기관차 한 대로 화차를 밀고 당겨 ' +
         '출발선에 정해진 순서로 세워 놓는 퍼즐입니다.</p>' +
 
@@ -1444,7 +1537,9 @@ window.SH.UI = (function () {
         artLIFO() +
       '</div></div>' +
 
-      '<div class="sh-rules-foot"></div>');
+      '<div class="sh-rules-foot"></div>' +
+      '</div>');
+    var rBody = rCard.querySelector('.sh-rules-body');
     var rClose = rb('sh-rules-x', '닫기', ICON.close);
     rClose.classList.remove('sh-glass');
     rClose.style.width = '34px'; rClose.style.height = '34px';
@@ -1481,7 +1576,8 @@ window.SH.UI = (function () {
       cluster: cluster, bUndo: bUndo, bHint: bHint, bRest: bRest, bMenu: bMenu,
       bHelp: bHelp, bZin: bZin, bZout: bZout,
       consist: consist, consistRow: consistRow, consistT: consistT, labels: labels,
-      rules: rules, rCard: rCard, rClose: rClose, rOk: rOk,
+      rules: rules, rCard: rCard, rHead: rCard.querySelector('.sh-rules-head'),
+      rBody: rBody, rClose: rClose, rOk: rOk,
       toasts: toasts, flash: flash, flashT: flash.querySelector('span'),
       cpls: cpls, coach: coach, cpt: cpt, cbub: cbub, carw: carw,
       cbubP: cbub.querySelector('p'), cbubK: cbub.querySelector('.k'),
@@ -1550,6 +1646,10 @@ window.SH.UI = (function () {
     on(els.rClose, 'click', function () { sfx('ui'); api.rules(false); call('onRules', false); });
     on(els.rOk, 'click', function () { sfx('ui'); api.rules(false); call('onRules', false); });
     on(els.rules, 'click', function (e) { if (e.target === els.rules) api.rules(false); });
+    /* 본문이 고정 헤더 밑으로 지나가기 시작하면 경계선을 켠다 */
+    on(els.rBody, 'scroll', function () {
+      els.rHead.classList.toggle('is-scrolled', els.rBody.scrollTop > 2);
+    });
 
     /* 줌 버튼 — 휠·핀치가 없는 기기용. 1 = 거리 10% */
     on(els.bZin, 'click', function () { sfx('ui'); zoomBy(-1); });
@@ -1575,15 +1675,20 @@ window.SH.UI = (function () {
   }
 
   /* ── 레이아웃 측정 (칩 크기 · 스트립 높이) ──────────────────── */
+  /** 하단 패널들이 공유하는 가용 폭 — 목표 스트립과 편성 바가 같은 기준을 쓴다. */
+  function band() {
+    /* 패널 자신이 아니라 '루트'에서 가용 폭을 잰다 — 순환 참조 방지 */
+    var pad = parseFloat(getComputedStyle(els.host).getPropertyValue('--sh-pad')) || 12;
+    var wide = window.innerWidth >= 720;
+    return { pad: pad, wide: wide,
+             w: (root ? root.clientWidth : window.innerWidth) - pad - (wide ? 132 : pad) };
+  }
   function measure() {
     if (!built || !els.strip) return;
     try {
       var n = targetIds.length || 1;
-      /* 스트립 자신이 아니라 '루트'에서 가용 폭을 잰다 — 순환 참조 방지 */
-      var pad = parseFloat(getComputedStyle(els.host).getPropertyValue('--sh-pad')) || 12;
-      var wide = window.innerWidth >= 720;
-      var band = (root ? root.clientWidth : window.innerWidth) - pad - (wide ? 132 : pad);
-      var cap = U.clamp(band, 180, 620);
+      var B = band(), pad = B.pad, wide = B.wide, band_ = B.w;
+      var cap = U.clamp(band_, 180, 620);
       var gap = n > 9 ? 3 : (n > 6 ? 4 : (wide ? 8 : 6));
       var padH = wide ? 28 : 24;                  // 스트립 좌우 패딩
       /* 썸네일은 '실루엣으로 화차 종류를 읽는' UI 다 — 작아지면 그냥 색 점이 된다.
@@ -1592,7 +1697,11 @@ window.SH.UI = (function () {
       var need = padH + n * w + gap * (n - 1);
       els.host.style.setProperty('--sh-chip-w', w + 'px');
       els.host.style.setProperty('--sh-chip-gap', gap + 'px');
-      els.host.style.setProperty('--sh-strip-w', Math.min(cap, Math.max(240, need)) + 'px');
+      var stripW = Math.min(cap, Math.max(240, need));
+      els.host.style.setProperty('--sh-strip-w', stripW + 'px');
+      /* 편성 바가 붙을 왼쪽 앵커 = 목표 스트립의 왼쪽 모서리.
+         스트립 폭은 레벨 동안 변하지 않으므로 이 값도 레벨 내내 고정이다. */
+      stripX = Math.max(0, (band_ - Math.min(stripW, band_)) / 2);
       /* 승리 중에는 스트립이 언마운트되어 높이가 0 이다 — 그때 갱신하면
          버튼 클러스터가 화면 아래로 내려앉았다가 되돌아올 때 튄다. 마지막 값을 유지한다. */
       var sh = els.strip.offsetHeight;
@@ -1604,20 +1713,36 @@ window.SH.UI = (function () {
     } catch (e) { U.err(e); }
   }
 
-  /** 편성 바 칩 폭 — ✂ 는 44px 고정(터치 타겟)이라 칩만 줄여서 맞춘다. */
+  /** 이 레벨에서 편성이 가질 수 있는 최대 량수. 칩 폭·앵커를 여기에 맞춰 두면
+      실제 편성이 늘었다 줄었다 해도 ✂ 들이 제자리를 지킨다. */
+  function maxConsist() {
+    var m = 0, hc = headCap();
+    try { if (level && level.wagons) m = level.wagons.length | 0; } catch (e) { U.err(e); }
+    if (hc > 1) m = m ? Math.min(m, hc - 1) : (hc - 1);          // 인상선 정원(기관차 포함)
+    return Math.max(1, m || consistList.length || 1);
+  }
+
+  /** 편성 바 기하 — ✂ 는 44px 고정(터치 타겟)이라 칩만 줄여서 맞춘다.
+      ★ 칩 폭과 왼쪽 앵커는 **현재 편성 길이가 아니라 레벨 최대치**로 정한다.
+      길이에 따라 다시 계산하면 자동 연결로 2칸→3칸이 되는 순간 모든 ✂ 가 옆으로
+      밀려 직전과 같은 자리를 눌렀을 때 헛클릭이 난다(실측 45px, 아이콘 피치 90px). */
   function measureConsist() {
     if (!built || !els.consist) return;
     var n = consistList.length;
     if (!n) return;
-    var pad = parseFloat(getComputedStyle(els.host).getPropertyValue('--sh-pad')) || 12;
-    var wide = window.innerWidth >= 720;
-    var band = (root ? root.clientWidth : window.innerWidth) - pad - (wide ? 132 : pad);
-    var avail = U.clamp(band, 200, wide ? 600 : 560) - 20;      // 20 = 바 좌우 패딩
-    var w = Math.floor((avail - 44 * n) / (n + 1));             // 기관차 1 + 화차 n
-    w = U.clamp(w, 22, wide ? 52 : 46);
+    var B = band(), wide = B.wide;
+    var avail = U.clamp(B.w, 200, wide ? 600 : 560) - 20;       // 20 = 바 좌우 패딩
+    var mx = maxConsist();
+    var w = Math.floor((avail - 44 * mx) / (mx + 1));           // 기관차 1 + 화차 mx
+    w = U.clamp(w, 30, wide ? 52 : 46);
+    var wOf = function (k) { return (k + 1) * w + 44 * k + 20; };
+    /* 앵커: 목표 스트립의 왼쪽 모서리. 최대 길이가 밴드를 넘으면 왼쪽으로 당겨
+       (그래도 고정값이다) 기관차가 화면 밖으로 밀려나지 않게 한다. */
+    var x = Math.max(0, Math.min(stripX, B.w - Math.min(wOf(mx), B.w)));
     els.host.style.setProperty('--sh-cv-w', w + 'px');
+    els.host.style.setProperty('--sh-consist-x', Math.round(x) + 'px');
     els.host.style.setProperty('--sh-consist-w',
-      Math.min(avail + 20, (n + 1) * w + 44 * n + 20) + 'px');
+      Math.min(B.w - x, avail + 20, wOf(n)) + 'px');
   }
 
   /* ── 별 렌더 ─────────────────────────────────────────────────── */
@@ -2102,11 +2227,78 @@ window.SH.UI = (function () {
      ══════════════════════════════════════════════════════════════ */
   function cutHook(k) {
     if (consistHooks && typeof consistHooks.onCut === 'function') {
-      try { consistHooks.onCut(k); } catch (e) { U.err(e); }
-      return;
+      try { return consistHooks.onCut(k); } catch (e) { U.err(e); return undefined; }
     }
-    if (typeof hooks.onCut === 'function') { call('onCut', k); return; }
-    call('onCoupler', k);                    // 구형 Game 폴백
+    if (typeof hooks.onCut === 'function') return call('onCut', k);
+    return call('onCoupler', k);             // 구형 Game 폴백
+  }
+
+  /* ── ✂ 결과 피드백 ─────────────────────────────────────────────
+     90-game.js 는 이동 애니메이션 중 들어온 분리를 큐에 담아 두고 나중에 실행한다
+     (`doCut` 이 false 를 돌려준다). 그런데 예전 UI 는 눌리기만 하면 '성공' 연출을
+     돌려서, 실제로는 아무 일도 안 일어난 화면에 성공 신호만 남았다.
+     이제 세 갈래를 분명히 나눈다: 성공(갈라짐) / 예약(도는 호) / 거부(흔들림). */
+  function cutBtn(k) {
+    return els.consistRow ? els.consistRow.querySelector('.sh-cut[data-k="' + k + '"]') : null;
+  }
+  function clearCutWait() {
+    clearTimeout(cutT); cutT = 0;
+    if (!cutPend) return;
+    var b = cutBtn(cutPend.k);
+    if (b) {
+      b.classList.remove('is-wait', 'is-pulse');
+      b.removeAttribute('aria-busy');
+      b.title = b.getAttribute('aria-label') || '';
+    }
+    cutPend = null;
+  }
+  /** 예약됨 — "지금 잘린 게 아니라 이동이 끝나면 자른다" */
+  function markCutWait() {
+    if (!cutPend) return;
+    var b = cutBtn(cutPend.k);
+    if (!b) return;
+    b.classList.remove('is-pulse');
+    b.classList.add('is-wait');
+    b.setAttribute('aria-busy', 'true');
+    b.title = '이동이 끝나면 여기서 분리합니다 (대기 중)';
+    armCutWait();
+  }
+  /* ★ 예약 표시의 수명은 **시계가 아니라 이동**에 묶여 있다.
+     90-game.js 의 큐 TTL(6초)은 이제 키를 누른 때가 아니라 판이 **정지한 때**부터
+     다시 센다(touchQueue). 그래서 6.4초짜리 고정 타이머로 흉내 내면, 한 번에 6초가
+     넘는 이동(견인+추진) 중에 배지가 먼저 꺼졌다가 갑자기 잘리는 그림이 된다.
+     대신 이동이 이어지는 동안에는 창을 계속 갱신하고(setBusy(true)),
+     정지하면 flush 가 한 틱 안에 끝나므로 짧은 유예만 준다(setBusy(false)). */
+  function armCutWait(graceMs) {
+    if (!cutPend) return;
+    clearTimeout(cutT);
+    cutT = setTimeout(clearCutWait, graceMs || 6400);
+  }
+  /** 실제로 분리됨 — 잘린 자리에서 연결선이 좌우로 갈라진다.
+      편성 바가 다시 그려져도 살아남도록 행이 아니라 패널에 붙인다. */
+  function snipAt(x) {
+    if (!els.consist || reduced() || x == null || !isFinite(x)) return;
+    var s = el('span', 'sh-snip', '<i></i><b></b>');
+    s.style.left = Math.round(x) + 'px';
+    els.consist.appendChild(s);
+    setTimeout(function () { if (s.parentNode) s.parentNode.removeChild(s); }, 520);
+  }
+  function cutX(b) {
+    try {
+      var br = b.getBoundingClientRect(), cr = els.consist.getBoundingClientRect();
+      return br.left + br.width / 2 - cr.left;
+    } catch (e) { return null; }
+  }
+  /** 다시 그린 편성의 동쪽 끝 = 방금 갈라진 면. 누를 때의 좌표를 그대로 쓰면
+      바가 줄어든 뒤 패널 밖에 선이 남는다. */
+  function rowEndX() {
+    try {
+      var last = els.consistRow.lastElementChild;
+      if (!last) return null;
+      var lr = last.getBoundingClientRect(), cr = els.consist.getBoundingClientRect();
+      if (!lr.width && !lr.height) return null;
+      return lr.right - cr.left;
+    } catch (e) { return null; }
   }
   function mkCut(k, n) {
     var b = el('button', 'sh-cut', '<i>' + ICON.cut + '</i>');
@@ -2118,7 +2310,24 @@ window.SH.UI = (function () {
       : ('여기서 분리 — 앞 ' + k + '량만 데리고 가기'));
     b.title = b.getAttribute('aria-label');
     on(b, 'pointerdown', function (e) { e.stopPropagation(); });
-    on(b, 'click', function (e) { e.stopPropagation(); sfx('ui'); cutHook(k); });
+    on(b, 'click', function (e) {
+      e.stopPropagation();
+      sfx('ui');
+      if (cutPend) clearCutWait();               // 마음이 바뀌었다 — 이전 예약 표시를 지운다
+      var n0 = consistList.length;
+      cutPend = { k: k, n: n0, x: cutX(b), t: U.now() };
+      /* 훅 안에서 Game 이 동기적으로 상태를 갱신하면 renderConsist 가 성공을 처리한다 */
+      var r = cutHook(k);
+      if (!cutPend) return;                      // 이미 성공으로 소비됨
+      if (r === true || consistList.length < n0) { var x = cutPend.x; cutPend = null; snipAt(x); return; }
+      if (busy) { markCutWait(); return; }       // 애니메이션 중 → 큐에 들어갔다
+      cutPend = null;                            // 거부 — 성공처럼 보이는 연출은 절대 금지
+      b.classList.remove('is-no');
+      void b.offsetWidth;
+      b.classList.add('is-no');
+      clearTimeout(b.__no);
+      b.__no = setTimeout(function () { b.classList.remove('is-no'); }, 360);
+    });
     return b;
   }
   function renderConsist(list) {
@@ -2126,19 +2335,45 @@ window.SH.UI = (function () {
     var arr = [], i;
     list = list || [];
     for (i = 0; i < list.length; i++) arr.push(resolveWagon(list[i]));
+    /* ★ 분리가 **실제로** 반영됐는가 — 성공 연출은 오직 여기서만 튼다.
+       (직접 실행이든 큐에 들어갔다가 나중에 실행됐든 결과는 여기로 돌아온다) */
+    var snipX = null;
+    if (cutPend && arr.length < cutPend.n) {
+      snipX = cutPend.x; clearTimeout(cutT); cutT = 0; cutPend = null;
+    }
     consistList = arr;
 
     if (!arr.length) {
+      clearCutWait();
+      clearTimeout(els.consist.__off);
+      consistSig = '';
+      /* cut(0) — 전부 내려놓기. 바가 그냥 사라지면 "잘렸다"가 안 읽힌다.
+         갈라지는 연출을 보여 준 뒤에 접는다. Game 이 같은 틱에 빈 편성을 두 번
+         밀어 넣는 경우가 있어(모션 즉시 완료) 시각(partT)으로 창을 잡는다. */
+      if (snipX != null && !reduced()) { partT = U.now() + 380; snipAt(snipX); }
+      if (partT > U.now()) {
+        els.consist.classList.add('is-parting');
+        els.consist.__off = setTimeout(function () {
+          partT = 0;
+          els.consist.classList.remove('is-parting');
+          if (consistList.length) return;
+          els.consist.classList.add('is-off');
+          els.consist.setAttribute('aria-hidden', 'true');
+        }, Math.max(16, partT - U.now()));
+        return;
+      }
+      els.consist.classList.remove('is-parting');
       els.consist.classList.add('is-off');
       els.consist.setAttribute('aria-hidden', 'true');
-      consistSig = '';
       return;
     }
     var sig = arr.map(function (w) { return w.id + ':' + w.type + ':' + w.livery; }).join('|');
-    els.consist.classList.remove('is-off');
+    clearTimeout(els.consist.__off);
+    partT = 0;
+    els.consist.classList.remove('is-off', 'is-parting');
     els.consist.removeAttribute('aria-hidden');
     measureConsist();
-    if (sig === consistSig) return;          // 같은 편성이면 DOM 을 다시 만들지 않는다
+    if (sig === consistSig) { if (snipX != null) snipAt(snipX); return; }
     consistSig = sig;
 
     els.consistRow.innerHTML = '';
@@ -2156,6 +2391,7 @@ window.SH.UI = (function () {
       '지금 연결된 편성 ' + arr.length + '량 — 가위 버튼으로 분리');
     els.consistT.innerHTML =
       '<span>기관차 + ' + arr.length + '량 · <b>' + ICON.cut + '</b> 로 분리 — 0수</span>';
+    if (snipX != null) { var ex = rowEndX(); snipAt(ex == null ? snipX : ex); }
   }
 
   /* ══════════════════════════════════════════════════════════════
@@ -2341,6 +2577,9 @@ window.SH.UI = (function () {
     if (!built) return;
     show(els.rules, open !== false, 340);
     if (open !== false) {
+      /* 항상 맨 위에서 시작 — 두 번째로 열었을 때 3번 항목부터 보이면 안 된다 */
+      if (els.rBody) els.rBody.scrollTop = 0;
+      if (els.rHead) els.rHead.classList.remove('is-scrolled');
       requestAnimationFrame(function () {
         try { els.rOk.focus({ preventScroll: true }); } catch (e) { /* 구형 브라우저 */ }
       });
@@ -2359,7 +2598,14 @@ window.SH.UI = (function () {
     if (!built) return false;
     var s = String(target == null ? '' : target), node = null, r;
     if (s.indexOf('track:') === 0) { r = labelMap[s.slice(6)]; node = r && r.el; }
-    else if (s.indexOf('consist') === 0) node = els.consistRow.querySelector('.sh-cut');
+    else if (s.indexOf('consist') === 0) {
+      /* 예약된 ✂ 가 있으면 이건 90-game.js 의 "큐에 담았다" 신호다 —
+         성공처럼 보이는 링 대신 '대기 중' 표현을 쓰고, 누른 바로 그 가위에 붙인다.
+         (예전에는 어느 걸 눌렀든 항상 첫 번째 ✂ 가 반짝여서 더 혼란스러웠다.) */
+      if (cutPend) { markCutWait(); return true; }
+      var kk = s.indexOf(':') > 0 ? s.slice(s.indexOf(':') + 1) : '';
+      node = (kk !== '' && cutBtn(kk)) || els.consistRow.querySelector('.sh-cut');
+    }
     else if (s === 'strip' || s === 'target') node = els.strip;
     else if (s === 'cluster') node = els.cluster;
     else if (labelMap[s]) node = labelMap[s].el;
@@ -2510,6 +2756,40 @@ window.SH.UI = (function () {
     var next = tutLbl && labelMap[tutLbl];
     if (next) { next.tut = true; next.el.classList.add('is-tut'); }
   }
+  /* ── 코치 카드 최신성 ────────────────────────────────────────────
+     90-game.js 는 이동이 **끝난 뒤에야** 안내를 다시 고른다(onMotionDone → tutSync).
+     그런데 상태는 이동이 **시작될 때** 이미 바뀐다 — 그 2~4초 동안 카드는 이미 끝난
+     단계를 말하고 손가락은 지난 선로를 짚는다. 플레이어는 자기 조작이 먹혔는지
+     확신하지 못했다. 그래서 상태가 카드와 어긋난 순간부터 흐리게 만든다. */
+  function stateSig() {
+    var s = curState;
+    if (!s) return '';
+    return (s.at || '') + '|' + ((s.consist || []).join(',')) + '|' + (s.moves | 0) +
+           '|' + (s.tracks && s.tracks.EXIT ? s.tracks.EXIT.join(',') : '');
+  }
+  function setCoachStale(on) {
+    on = !!on;
+    if (coachStale === on || !els.coach) return;
+    coachStale = on;
+    els.coach.classList.toggle('is-stale', on);
+    /* 흐린 동안에는 지난 선로 이름표를 계속 빛나게 두지 않는다 */
+    if (on) markTutLabel(null);
+    else if (tutStep) markTutLabel(trackOf(tutStep.at || tutStep.anchor));
+  }
+  /** 이번 틱에 Game 이 안내를 갈아 끼우지 않았다면(= 같은 단계) 지금 카드가 최신이다. */
+  function coachSettle() {
+    staleT = 0;
+    if (!tutStep || busy) return;              // 아직 움직이는 중이면 계속 흐리게
+    tutSig = stateSig();
+    setCoachStale(false);
+  }
+  function coachTouch() {
+    if (!tutStep) return;
+    if (tutSig != null && stateSig() !== tutSig) setCoachStale(true);
+    clearTimeout(staleT);
+    staleT = setTimeout(coachSettle, 0);       // Game 의 tutSync() 다음에 판정한다
+  }
+
   /** 앵커가 3D 위에 있으면 카메라가 도는 동안 말풍선이 따라가야 한다. */
   function followTut() {
     tutRaf = 0;
@@ -2526,7 +2806,9 @@ window.SH.UI = (function () {
     if (!built) return false;
     if (step == null || step === false) {
       if (tutStep && tutStep.id) markSeen(tutStep.id);
-      tutStep = null; tutPt = null;
+      tutStep = null; tutPt = null; tutSig = null;
+      clearTimeout(staleT); staleT = 0;
+      setCoachStale(false);
       markTutLabel(null);
       if (tutRaf) { cancelAnimationFrame(tutRaf); tutRaf = 0; }
       show(els.coach, false, 360);
@@ -2560,6 +2842,11 @@ window.SH.UI = (function () {
     els.cbubSkip.style.display = wantSkip ? '' : 'none';
     els.cbubB.style.display = wantOk ? '' : 'none';
     els.cbubRow.style.display = (wantSkip || wantOk) ? '' : 'none';
+
+    /* 이 단계는 지금 상태를 보고 고른 것이다 — 기준점을 새로 찍고 흐림을 푼다 */
+    clearTimeout(staleT); staleT = 0;
+    tutSig = stateSig();
+    setCoachStale(false);
 
     show(els.coach, true, 360);
     var anc = def.at || def.anchor;
@@ -2625,6 +2912,10 @@ window.SH.UI = (function () {
         starOverride = -1;
         curState = null;
         lastWin = null;
+        clearCutWait();                 // 이전 판에서 예약된 ✂ 표시가 넘어오면 안 된다
+        clearTimeout(els.consist.__off);
+        partT = 0;
+        els.consist.classList.remove('is-parting');
         els.lvNum.textContent = 'LV ' + pad2(levelIdx + 1);
         els.lvName.textContent = (def && def.name) ? def.name : '';
         curPar = (def && def.par) ? (def.par | 0) : 0;
@@ -2639,6 +2930,7 @@ window.SH.UI = (function () {
     setState: function (state) {
       if (!built) return;
       curState = state || null;
+      coachTouch();                     // 상태가 안내보다 앞서 갔으면 카드를 흐리게
       if (state && typeof state.moves === 'number') api.setMoves(state.moves, curPar);
       refreshProgress();
       /* Game 이 UI.consist 를 쓰지 않는 동안에도 ✂ 는 살아 있어야 한다 —
@@ -2666,6 +2958,11 @@ window.SH.UI = (function () {
     setBusy: function (b) {
       if (!built) return;
       busy = !!b;
+      /* 정지하면 Game 이 곧바로 안내를 다시 고른다 — 그 다음 틱에 흐림을 판정한다 */
+      if (!busy) coachTouch();
+      /* 예약된 ✂ 의 표시 창을 이동에 맞춰 다시 잰다 (armCutWait 주석 참고).
+         정지 뒤엔 Game 이 같은 틱에 flushQueue 하므로 짧은 유예면 충분하다. */
+      if (cutPend) armCutWait(busy ? 6400 : 900);
       root.classList.toggle('is-busy', busy);
       var list = [els.bUndo, els.bHint, els.bRest];
       for (var i = 0; i < list.length; i++) {
@@ -2753,6 +3050,9 @@ window.SH.UI = (function () {
       try {
         clearWinTimers();
         clearTimeout(hudT);
+        clearTimeout(cutT); cutT = 0; cutPend = null; partT = 0;
+        clearTimeout(staleT); staleT = 0;
+        if (els.consist) clearTimeout(els.consist.__off);
         if (lblRaf) { cancelAnimationFrame(lblRaf); lblRaf = 0; }
         if (tutRaf) { cancelAnimationFrame(tutRaf); tutRaf = 0; }
         for (var i = toastQ.length - 1; i >= 0; i--) dropToast(toastQ[i]);
@@ -2767,6 +3067,7 @@ window.SH.UI = (function () {
       root = null; built = false; els = {}; couplers = {}; chipEls = []; api.el = null;
       labelMap = {}; labelsOwned = false; consistOwned = false; consistHooks = null;
       consistList = []; consistSig = ''; tutStep = null; tutPt = null; tutLbl = null;
+      tutSig = null; coachStale = false; stripX = 0;
     }
   };
 

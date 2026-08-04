@@ -62,6 +62,7 @@
       'game:reject'({track,reason}) 'game:hint'({type,track,k})
       'game:pulseTrack'(trackId) 'game:win'(result) 'game:quality'(q)
       'game:rest'({state,move}) 'game:hoverTrack'({track,legal})
+      'game:hintReady'(bool)   힌트가 지금 즉답 가능한가 (Puzzle.hintReady)
 
    4) Puzzle 상태에 `_cap`(트랙별 정원) 과 `_target`(목표 배열) 을 덧붙여 둔다.
       Puzzle.clone 이 알 수 없는 필드를 지우지 않는다고 가정한다 (지워져도 Game 이 다시 채움).
@@ -69,6 +70,10 @@
    5) 선택 훅 — 있으면 쓰고 없으면 조용히 건너뛴다:
       UI.tick(dt) · UI.pulse(id) · UI.hint(id) · UI.reject(id) · UI.shake(id) ·
       UI.hide(b) · Input.highlight(id) · Input.setEnabled(b)
+      UI.isModalOpen() -> bool   카드(도움말/레벨 선택/승리)가 떠 있는가.
+                                 없으면 Game 이 오버레이의 .is-on 클래스로 판정한다.
+      UI.setHintReady(b)         힌트 버튼 활성/스피너. 없으면 Game 이 .sh-hint 의
+                                 aria-disabled 를 직접 토글한다(같은 CSS 규칙을 쓴다).
    ============================================================================ */
 SH.Game = (function () {
   'use strict';
@@ -505,6 +510,11 @@ SH.Game = (function () {
     SHOT.ready = true;
     Game.ready = true;
 
+    /* 중간 저장을 복원했으면 그 자리에서 다시 예열한다 — Puzzle 의 자동 프리웜은
+       레벨 **시작 상태**만 커버해서, 이어하기로 들어오면 힌트 캐시가 비어 있다. */
+    if (resumed) prewarmHint();
+    pushHintReady(true);
+
     if (resumed) M('UI', 'toast', '하던 판을 이어서 불러왔어요 — 처음부터 하려면 다시하기를 누르세요.');
   }
 
@@ -627,6 +637,8 @@ SH.Game = (function () {
     nearWinT = false;
     tutIdx = -1;
     tutSync();
+    if (opts.state) prewarmHint();     /* 시작 상태가 아닌 판(이어하기 등)은 여기서 예열 */
+    pushHintReady(true);
     if (!opts.noSave) saveNow();
     return true;
   }
@@ -656,7 +668,7 @@ SH.Game = (function () {
   function refreshLevelUI() {
     M('UI', 'setLevel', def);
     M('UI', 'target', (def && def.target) || []);
-    M('UI', 'setBusy', busy);
+    setBusyUI(busy);
     refreshStateUI();
   }
 
@@ -894,6 +906,39 @@ SH.Game = (function () {
       ok: !!s.ok,
       force: true                                      // 표시 여부는 Game 이 판단한다
     });
+  }
+
+  /** 같은 단계라도 카드/포인터를 다시 그리게 한다 (엉뚱한 곳을 눌러 재안내할 때). */
+  function tutRepoint() {
+    if (tutIdx < 0) { tutSync(); return; }
+    tutIdx = -1;
+    tutSync();
+  }
+
+  /** 지금 안내가 가리키는 선로 id (없으면 null). */
+  function tutTarget() {
+    var steps = tutSteps();
+    if (!steps || tutIdx < 0 || tutIdx >= steps.length) return null;
+    var a = String(steps[tutIdx].anchor || '');
+    return a.indexOf('track:') === 0 ? a.slice(6) : null;
+  }
+
+  /* 튜토리얼이 "측선 1을 탭하세요" 를 띄운 상태에서 호기심에 빈 출발선을 눌러 보면
+     그대로 실행되어 **아무것도 안 하고 1수가 사라진다.** par 3 짜리 판에서는 그것만으로
+     별이 날아간다. 막지는 않는다(가둬두면 답답하다는 것이 원래 방침) — 대신 대가를
+     분명히 말해 주고, 안내 카드를 원래 선로로 다시 겨눈다. */
+  function tutStrayNotice(id, pre, want) {
+    if (!want || want === id) return;
+    var empty = ((pre.tracks && pre.tracks[id]) || []).length === 0;
+    var light = ((pre.consist) || []).length === 0;
+    M('UI', 'toast',
+      (empty && light)
+        ? '빈 선로로 이동했습니다 — 1수 소모. 지금 안내는 ' + trackName(want) + ' 입니다.'
+        : '안내와 다른 선로로 갔어요 — 이 이동도 1수를 씁니다.',
+      'warn');
+    M('UI', 'hintPulse', 'track:' + want);
+    M('Input', 'highlight', want);
+    tutRepoint();
   }
 
   /* ── E. 승리 직전 안내 ─────────────────────────────────────
@@ -1282,6 +1327,38 @@ SH.Game = (function () {
     emit('reject', { track: id, reason: String(code) });
   }
 
+  /* ── 카드(모달)가 떠 있는 동안 ────────────────────────────────────
+     **규칙을 읽는 행동이 판을 바꾸면 안 된다.** 도움말 카드에 "키보드: 12345 선로"
+     라고 적혀 있으니 읽다가 눌러 보는 것이 자연스러운데, 그때마다 기관차가 실제로
+     움직이고 이동수가 올라갔다.
+     키는 Game 의 onKey 와 Input 의 onKey 두 곳에서 들어오므로 키 핸들러가 아니라
+     **행동 지점(doGo/doCut)** 에서 막는다 — 한 군데만 막으면 다른 쪽으로 새어 든다.
+     판정: UI 가 isModalOpen() 을 주면 그 말을 따르고, 없으면 오버레이의 is-on
+     클래스로 본다(80-ui 의 show() 가 클래스를 **동기로** 토글하므로, 카드를 닫고
+     곧바로 행동을 부르는 버튼들 — 승리 카드의 '다시하기', 레벨 시트의 레벨 선택 —
+     은 그대로 동작한다). */
+  var MODAL_SEL = '.sh-rules.is-on,.sh-sheet.is-on,.sh-win.is-on,.sh-scrim.is-on';
+  var modalNagT = -1e9;
+
+  function modalOpen() {
+    if (shotMode) return false;                 // 결정론 스크린샷 모드는 스스로 UI 를 여닫는다
+    var r = M('UI', 'isModalOpen');
+    if (typeof r === 'boolean') return r;
+    var host = (SH.UI && SH.UI.el) || document.getElementById('ui-root');
+    if (!host || !host.querySelector) return false;
+    try { return !!host.querySelector(MODAL_SEL); } catch (e) { return false; }
+  }
+
+  /** 카드가 떠 있으면 true (그리고 가끔 이유를 한 번 알려 준다 — 토스트는 카드 위에 뜬다). */
+  function modalBlocks() {
+    if (!modalOpen()) return false;
+    if (phase === 'PLAY' && U.now() - modalNagT > 2500) {
+      modalNagT = U.now();
+      M('UI', 'toast', '카드를 닫으면 조작할 수 있어요.');
+    }
+    return true;
+  }
+
   /* ── 입력 큐 ────────────────────────────────────────────────────
      이동 애니메이션은 2~4초다. 그동안 들어온 탭/키를 예전엔 조용히 버렸다.
      플레이테스트에서 20여 세션 중 12번의 입력이 이렇게 증발했고, 거부 피드백이
@@ -1294,9 +1371,23 @@ SH.Game = (function () {
      분리가 조용히 사라지고 기관차가 화차를 도로 끌고 나갔다(고치려던 바로 그 증상이다).
      비울 때는 컷을 먼저 — 컷은 수를 소모하지 않고 논리적으로 이동보다 앞선다. */
   var queuedGo = null, queuedCut = null, queuedAt = 0;
+  /* TTL 은 "판이 멈춘 뒤" 부터 잰다 (touchQueue 참고). 기다리게 만든 쪽은 게임이므로
+     애니메이션이 흐른 시간을 의도의 나이로 세면 안 된다. */
   var QUEUE_TTL = 6000;        // 너무 늦게 도착한 의도는 실행하지 않는다
 
+  /** 대기 시계를 지금으로 되감는다. 정지 시점에 호출. */
+  function touchQueue() { if (queuedGo || queuedCut) queuedAt = U.now(); }
+
   function queueIntent(it) {
+    /* 숫자키는 Input 과 Game 두 곳에서 처리된다 — 한 번 눌러도 doGo 가 두 번 들어오고,
+       두 번째는 이미 busy 라 **예약**된다. 그 예약은 도착하는 순간 언제나 'same-track'
+       이라, 정지하자마자 "기관차가 이미 측선 1에 서 있습니다" 라는 엉뚱한 거절이
+       뜬다(실측). 지금 들어가고 있는 선로로 가는 예약과 같은 예약의 중복은 담지 않는다. */
+    if (it.kind === 'go') {
+      if (pending && pending.move && pending.move.type === 'go' && pending.move.track === it.id) return;
+      if (queuedGo && queuedGo.id === it.id) return;
+    } else if (queuedCut && queuedCut.k === it.k) return;
+
     if (it.kind === 'go') queuedGo = it; else queuedCut = it;
     queuedAt = U.now();
     M('Audio', 'play', 'ui');
@@ -1307,14 +1398,29 @@ SH.Game = (function () {
   function flushQueue() {
     if (!queuedGo && !queuedCut) return;
     if (U.now() - queuedAt > QUEUE_TTL) { clearQueue(); return; }
+    /* 애니메이션 중에 도움말을 열었다면 지금 실행하지 않는다. 버리지도 않는다 —
+       카드를 닫으면 (TTL 안이라면) simulate 의 저빈도 점검이 그때 실행한다. */
+    if (modalOpen()) return;
     /* 컷이 먼저. 컷은 자기 애니메이션을 띄우므로 남은 이동은 그 완료 시점에 다시 flush 된다. */
     if (queuedCut) { var c = queuedCut; queuedCut = null; doCut(c.k); return; }
     var g = queuedGo; queuedGo = null; doGo(g.id);
   }
 
+  /** 이 레벨에 실제로 있는 선로인가 (stamp 가 채워 넣은 빈칸과 구분한다). */
+  function hasTrack(id) {
+    if (world && world.tracks && world.tracks.get) return !!world.tracks.get(id);
+    var l = (def && def.tracks) || [];
+    for (var i = 0; i < l.length; i++) if (l[i].id === id) return true;
+    return !l.length;
+  }
+
   function doGo(id) {
+    if (modalBlocks()) return false;       // 카드를 읽는 동안에는 판이 바뀌지 않는다
     enterPlay();
     if (!st || !id) return false;
+    /* 이 판에 없는 선로(LV01 의 측선 3 처럼)는 애니메이션 중이라도 지금 거절한다.
+       상태와 무관하게 앞으로도 불법이라 예약해 두면 몇 초 뒤에야 거절 토스트가 뜬다. */
+    if (!hasTrack(id)) { reject(id, 'no-track'); return false; }
     if (busy || phase === 'ANIM') { queueIntent({ kind: 'go', id: id }); return false; }
     if (phase !== 'PLAY') return false;
 
@@ -1322,6 +1428,7 @@ SH.Game = (function () {
     if (legal !== true) { reject(id, legal); return false; }
 
     var pre = pclone(st);
+    var want = tutTarget();                /* 안내가 가리키던 선로 — 상태가 바뀌기 전에 잡아 둔다 */
     var next = pf('go')(st, id);
     if (!next || !next.tracks) next = FB.go(pre, id);
     stamp(next);
@@ -1329,6 +1436,8 @@ SH.Game = (function () {
     pushUndo(pre);
     st = next; Game.state = st;
     refreshStateUI();
+    tutSync();                             /* 카드·포인터가 애니메이션을 기다리지 않고 따라온다 */
+    tutStrayNotice(id, pre, want);
     startMotion({
       type: 'go', track: id, trackId: id, to: id, from: pre.at,
       prev: pre, next: st
@@ -1337,6 +1446,7 @@ SH.Game = (function () {
   }
 
   function doCut(k) {
+    if (modalBlocks()) return false;       // 카드를 읽는 동안에는 판이 바뀌지 않는다
     enterPlay();
     if (!st) return false;
     if (busy || phase === 'ANIM') { queueIntent({ kind: 'cut', k: k | 0 }); return false; }
@@ -1354,6 +1464,7 @@ SH.Game = (function () {
     pushUndo(pre);
     st = next; Game.state = st;
     refreshStateUI();
+    tutSync();                             /* 분리 직후 다음 단계로 카드가 즉시 넘어간다 */
     M('Audio', 'play', 'hiss');
     startMotion({ type: 'cut', k: k, keep: k, track: pre.at, prev: pre, next: st });
     return true;
@@ -1375,6 +1486,8 @@ SH.Game = (function () {
     nearWinT = false;
     tutSync();
     checkNearWin();
+    prewarmHint();                /* 되돌린 자리도 힌트가 즉답이어야 한다 */
+    pushHintReady(true);
     emit('undo', { state: st });
     return true;
   }
@@ -1388,14 +1501,76 @@ SH.Game = (function () {
     return true;
   }
 
+  /* ── 힌트 프리웜 (50-puzzle 계약) ─────────────────────────────────
+     Puzzle.create 의 자동 프리웜은 레벨 **시작 상태**만 예열한다. 이어하기로 들어오거나
+     수를 둔 뒤에는 색인이 비어 있어 힌트를 누르는 순간 탐색이 시작되고, 그 프레임이
+     길어지거나(동기 예산 초과) 아무 수도 못 주고 빈손으로 돌아온다.
+     그래서 ① 판이 새 위치에 정지할 때마다 미리 풀어 두고, ② 아직 못 푼 동안에는
+     힌트 버튼을 잠가(스피너) "눌렀는데 왜 아무 일도 없지" 를 없앤다. */
+
+  var hintOK = true, hintPollT = 0;
+
+  function puzzleHintReady() {
+    if (!st || !def) return false;
+    var P = SH.Puzzle;
+    if (!P || typeof P.hintReady !== 'function' || dead['Puzzle.hintReady']) return true;
+    var r = guard('Puzzle.hintReady', function () { return P.hintReady(st, def.target); });
+    return (r === undefined) ? true : !!r;      // 알 수 없으면 잠그지 않는다
+  }
+
+  function prewarmHint() {
+    if (shotMode || !st || !def) return;
+    var P = SH.Puzzle;
+    if (!P || typeof P.prewarm !== 'function' || dead['Puzzle.prewarm']) return;
+    guard('Puzzle.prewarm', function () { P.prewarm(st, def.target); });
+  }
+
+  function hintBtnEl() {
+    var host = (SH.UI && SH.UI.el) || document.getElementById('ui-root');
+    if (!host || !host.querySelector) return null;
+    try { return host.querySelector('.sh-hint'); } catch (e) { return null; }
+  }
+
+  /** 힌트 버튼 상태를 UI 에 반영. UI 에 훅이 있으면 그쪽이 우선. */
+  function applyHintGate() {
+    if (SH.UI && typeof SH.UI.setHintReady === 'function') { M('UI', 'setHintReady', hintOK); return; }
+    var b = hintBtnEl();
+    if (!b) return;
+    var off = !hintOK || busy;                  // busy 는 UI.setBusy 와 같은 판단
+    b.setAttribute('aria-disabled', off ? 'true' : 'false');
+    b.disabled = off;
+    b.setAttribute('aria-busy', hintOK ? 'false' : 'true');
+  }
+
+  function pushHintReady(force) {
+    var r = puzzleHintReady();
+    if (!force && r === hintOK) return r;
+    hintOK = r;
+    applyHintGate();
+    emit('hintReady', r);
+    return r;
+  }
+
+  /** UI.setBusy 와 힌트 게이트를 함께 갱신한다 (setBusy 가 버튼을 되살리므로). */
+  function setBusyUI(b) { M('UI', 'setBusy', b); applyHintGate(); }
+
   function hint() {
     if (busy || !st || !def) return null;
+    var ready = pushHintReady(true);
     var m = null;
-    try { if (SH.Puzzle && SH.Puzzle.hint) m = SH.Puzzle.hint(st, def.target); }
-    catch (e) { strike('Puzzle.hint', e); }
+    if (ready) {
+      try { if (SH.Puzzle && SH.Puzzle.hint) m = SH.Puzzle.hint(st, def.target); }
+      catch (e) { strike('Puzzle.hint', e); }
+    } else {
+      prewarmHint();                            // 프레임을 잡아먹지 않고 예열만 건다
+    }
     if (!m) {
-      var msg = (def.hint && String(def.hint)) || '지금은 알려줄 수 있는 수가 없어요.';
+      var msg = ready
+        ? ((def.hint && String(def.hint)) || '지금은 알려줄 수 있는 수가 없어요.')
+        : '최적 경로를 계산하는 중이에요 — 잠시 뒤 다시 눌러 주세요.';
       M('UI', 'toast', msg);
+      M('Audio', 'play', 'ui');
+      pushHintReady(true);
       return null;
     }
     hintsUsed++;
@@ -1432,7 +1607,7 @@ SH.Game = (function () {
     busy = true; busyT = 0; sawImpact = false;
     busyLimit = (move.type === 'cut') ? 3.0 : 14.0;
     setPhase('ANIM');
-    M('UI', 'setBusy', true);
+    setBusyUI(true);
     M('Input', 'setEnabled', false);
     setExhaust(move.type === 'go' ? 0.9 : 0.15);
 
@@ -1458,7 +1633,7 @@ SH.Game = (function () {
   function onMotionDone(move) {
     busy = false; busyT = 0;
     setExhaust(0.12);
-    M('UI', 'setBusy', false);
+    setBusyUI(false);
     M('Input', 'setEnabled', true);
     M('Input', 'pickables', world, st);
     refreshStateUI();
@@ -1471,7 +1646,13 @@ SH.Game = (function () {
     saveNow();
     tutSync();
     checkNearWin();
+    prewarmHint();                /* 새로 정지한 자리의 최적 경로를 유휴 시간에 미리 푼다 */
+    pushHintReady(true);
     emit('rest', { state: st, move: move });
+    /* 이동 한 번이 TTL 보다 길어지면(실측 4.5~6.5초, 워치독은 14초까지 허용) 애니메이션
+       중에 넣은 의도가 **실행 직전에** 나이로 버려졌다 — 고치려던 증발이 그대로 재현된다.
+       기다리게 만든 쪽은 게임이므로, 정지한 지금부터 다시 센다. */
+    touchQueue();
     flushQueue();          /* 애니메이션 중 들어온 입력을 여기서 실행한다 */
   }
 
@@ -1603,6 +1784,40 @@ SH.Game = (function () {
     onZoom:    function (d) { M('Render', 'zoom', +d || 0); }
   };
 
+  /* ── 엔진음 정규화 ────────────────────────────────────────────────
+     Audio.engine(on, load) 는 load 를 **0~1** 로 받는다. 예전에는 speed/5.5 를 넘겨
+     열차가 구르는 내내 load 가 1.0 에 붙어 있었고, 그래서 오디오 쪽이 만든
+     아이들→노치 스윕이 실제로는 한 번도 재생되지 않았다.
+     60-motion 의 최고속은 상수가 아니라 (구간 거리 ÷ 소요시간) 에서 나오고 지금
+     25~32 m/s 로 조정되는 중이다. 그래서
+       ① Motion 이 최고속을 공개하면 그 값으로,
+       ② 아니면 이번 세션에서 **실제로 관측한 최고속**으로 정규화한다
+          (초기값 = 목표 대역의 중앙 28 m/s).
+     어느 값으로 착지하든 첫 이동 한 번이면 스윕이 전 구간을 쓰게 된다. */
+
+  var ENGINE_TOP0 = 28;        // 60-motion 목표 최고속(25~32 m/s)의 중앙값
+  var ENGINE_TOP_CAP = 90;     // 관측 이상치 방어 (한 프레임 튐)
+  var engTop = ENGINE_TOP0;
+
+  function engineLoad(sp) {
+    var m = SH.Motion;
+    var top = m ? +(m.maxSpeed || m.MAX_SPEED || m.topSpeed || 0) : 0;
+    if (!(top > 1)) {
+      /* ② 구형 Motion — 관측값으로 정규화한다. 위로만 올라가므로 한 번 긴 이동을
+         보고 나면 짧은 이동이 영영 저부하로 들리는 부작용이 있다. 그래서 ① 이 우선. */
+      if (sp > engTop && sp < ENGINE_TOP_CAP) engTop = sp;
+      top = engTop;
+    }
+    return U.clamp01(sp / top);
+  }
+
+  /** 지금 소리(engine/roll)를 60-motion 이 몰고 있는가.
+      Motion 은 job 이 있는 동안(=isBusy) 매 프레임 Audio.engine/roll 을 부른다.
+      update 가 죽어 있으면 아무도 안 부르는 것이므로 Game 이 되가져온다. */
+  function motionDrivesAudio() {
+    return !!(SH.Motion && SH.Motion.isBusy && SH.Motion.update && !dead['Motion.update']);
+  }
+
   /* ── 시뮬레이션 + 렌더 ────────────────────────────────────── */
 
   function renderFrame(dt) {
@@ -1622,13 +1837,19 @@ SH.Game = (function () {
     if (SH.FX && SH.FX.update && !dead['FX.update']) {
       try { SH.FX.update(dt, SH.Render && SH.Render.camera); } catch (e) { strike('FX.update', e); }
     }
-    if (audioReady && SH.Audio) {
+    /* ★ 이동 중에는 소리를 60-motion 이 몬다 — 여기서 덮어쓰지 않는다.
+       60-motion 은 update() 안에서 Audio.engine/roll 을 이미 매 프레임 부르고, 그 값은
+       속도뿐 아니라 **단계**를 담고 있다(브레이크 해제 0.62 → 견인/추진 → 정차 0.07).
+       Game 이 그 뒤에 속도비만으로 다시 부르면 마지막 호출이 이기므로 그 envelope 이
+       통째로 사라진다(실측: 같은 프레임 55개 중 51개가 불일치, 순항 내내 load 1.0 고정).
+       그래서 소유권을 시간으로 나눈다 — **이동 중 = Motion, 정지 중 = Game(아이들)**. */
+    if (audioReady && SH.Audio && !motionDrivesAudio()) {
       var sp = Math.abs(+(SH.Motion && SH.Motion.speed) || 0);
       if (SH.Audio.roll && !dead['Audio.roll']) {
-        try { SH.Audio.roll(sp); } catch (e) { strike('Audio.roll', e); }
+        try { SH.Audio.roll(sp); } catch (e) { strike('Audio.roll', e); }   // roll 은 m/s 그대로
       }
       if (SH.Audio.engine && !dead['Audio.engine']) {
-        try { SH.Audio.engine(true, U.clamp01(sp / 5.5)); } catch (e) { strike('Audio.engine', e); }
+        try { SH.Audio.engine(true, engineLoad(sp)); } catch (e) { strike('Audio.engine', e); }
       }
     }
     if (SH.UI && SH.UI.tick && !dead['UI.tick']) {
@@ -1637,6 +1858,15 @@ SH.Game = (function () {
     /* 선로 이름표는 카메라를 따라다녀야 하므로 매 프레임 좌표를 새로 넘긴다.
        (DOM 재생성은 UI 쪽 금지 사항 — 여기서는 숫자만 흘려보낸다.) */
     updateLabels();
+
+    /* 프리웜은 유휴 시간에 조금씩 도니까, 다 풀렸는지 낮은 빈도로 물어 버튼을 푼다.
+       카드 때문에 미뤄 둔 예약 입력도 여기서 다시 시도한다. */
+    hintPollT += dt;
+    if (hintPollT > 0.3) {
+      hintPollT = 0;
+      pushHintReady(false);
+      if (phase === 'PLAY' && !busy && (queuedGo || queuedCut)) flushQueue();
+    }
 
     // 모션 워치독 — done() 이 안 오면 스냅으로 강제 정렬
     if (pending) {
@@ -1735,6 +1965,15 @@ SH.Game = (function () {
     var tg = e.target;
     if (tg && /^(input|textarea|select)$/i.test(tg.tagName || '')) return;
     var k = e.key;
+    /* 카드가 떠 있는 동안에는 판을 바꾸는 키를 아예 받지 않는다.
+       닫기(esc)·소리(m)·규칙(?)·승리 카드의 다음 판(n/enter)만 통과시키고,
+       preventDefault 도 하지 않는다 — 카드 자신의 단축키를 막으면 안 되기 때문이다. */
+    if (modalOpen()) {
+      var kk = (k || '').toLowerCase();
+      var pass = (kk === 'escape' || kk === 'm' || kk === '?' || kk === '/' ||
+                  ((kk === 'n' || kk === 'enter') && phase === 'WIN'));
+      if (!pass) { if (KEYMAP[k]) modalBlocks(); return; }
+    }
     if (KEYMAP[k]) { doGo(KEYMAP[k]); e.preventDefault(); return; }
     switch ((k || '').toLowerCase()) {
       /* 'w' 는 Input 이 cut(1) 로 쓴다 (ONBOARDING §D). 인상선은 숫자 5 / 0. */

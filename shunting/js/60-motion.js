@@ -15,6 +15,10 @@
        Motion.isBusy   -> bool            // getter
        Motion.speed    -> number          // 현재 속도의 크기 (m/s). Audio.roll / FX 용
        Motion.velocity -> number          // 부호 있는 동쪽 방향 속도 (서쪽이면 음수)
+       Motion.maxSpeed -> number          // 이번(정지 중이면 마지막) 이동의 최고 속도 (m/s).
+       Motion.topSpeed -> number          //   speed 를 0~1 로 정규화하려는 쪽이 쓴다. 별칭.
+                                          //   최고속은 상수가 아니라 거리에서 유도되므로
+                                          //   이동마다 다르다 (실측 25~32, 두 구간이면 더 높다).
        Motion.setSpeedScale(x)            // 재생 배속 (1 = 기본, 3 = 빨리감기). __SHOT 용
        Motion.speedScale -> number        // getter
        Motion.cancel()                    // 진행 중 이동을 즉시 종료(최종 위치로 스냅 + done 호출)
@@ -29,10 +33,20 @@
        트랙마다 동쪽(버퍼) 끝부터 채운다. 최동단 차량의 동쪽 끝면은 s = length − 0.5,
        차체 끝면 사이 간격은 1.0 → 화차끼리 피치 13.0, 기관차–화차 14.0.
        at 트랙의 물리 배열은 [LOCO, ...consist, ...tracks[at]] (서→동).
-       연결기 유격 ±0.125 (총 0.25) 범위에서만 이 간격이 변한다.
+       연결기 유격 ±0.275 (총 0.55) 범위에서만 이 간격이 변한다.  이동이 끝나면
+       유격은 정확히 0 으로 닫히므로 정지 상태의 배치는 위 식과 완전히 일치한다.
+
+     ── 속도 프로파일 (SPEC §3.6 "무겁다") ──
+       주행 시간은 총 주행거리에서 나온다:  T = 0.30 + 6.7·(1 − e^(−D/84))  (최대 5.6s).
+       각 구간은 저크 제한 S-curve:  가속 램프(≤1.25s) → 순항 → 제동 램프 → 크리프.
+       마지막 0.5~1.0m 는 1.5~2.4 m/s 로 기어들어가 "쿵" 하고 붙는다.
+       최고 속도는 거리에서 유도된다 — 실측: 65m 한 구간 30.9 m/s · 90m 한 구간 26.6 m/s ·
+       두 구간(14+69m) 33 m/s · 두 구간(67+69m) 42 m/s.  Audio.roll 은 이 범위로 정규화할 것.
+       짧은 이동은 순항 구간이 사라져 삼각 프로파일이 된다.
 
      ── 총 소요시간 ──
-       고정 0.86s(준비·정지·분기기·히트스톱·정차) + 주행 1.35~2.55s = 2.2 ~ 3.4s.
+       고정 0.83~0.89s(준비·정지·분기기·히트스톱·정차) + 주행 0.3~5.6s.
+       한 구간짜리 이동 ≈ 2.0~5.5s, 견인+추진 두 구간이면 ≈ 6s (가장 긴 이동).
        prefers-reduced-motion 이면 ×0.6, 흔들림/셰이크/히트스톱 없음.
 
      ── 다른 모듈에 대한 기대 (없으면 조용히 무시하고 계속 동작) ──
@@ -65,18 +79,22 @@
   var BOGIE_OFF   = 4.2;       // 대차 중심 오프셋 (rig 에서 실측되면 덮어씀)
   var BODY_GAP    = 1.00;      // 완충기 접촉 시 차체 끝면 사이 거리 → 화차 피치 13.0
   var END_CLEAR   = 0.50;      // 버퍼스톱과 최동단 차량 끝면 사이
-  var SLACK       = 0.25;      // 연결기 총 유격 (SPEC §3.6)
+  /* 유격.  SPEC §3.6 은 실물 기준 ~0.25m 지만, 디오라마 카메라 거리에서 0.25m 는
+     화차 피치 13m 의 2% 라 화면에서 읽히지 않는다.  느슨한 나사연결 화물열차의
+     실제 상한(연결기당 ~0.3m)까지 키워 "파도가 편성을 타고 흐르는 것"을 보이게 한다. */
+  var SLACK       = 0.55;      // 연결기 총 유격
   var SLACK_H     = SLACK * 0.5;
   var BUF_MAX     = 0.25;      // 완충기 최대 행정
+  var BUF_GAIN    = 0.95 * BUF_MAX / SLACK_H;   // 압축량(σ<0) → 완충기 행정
   var RAIL_Y      = 0.30;      // 레일 상면 (World.point 가 y=0 을 주면 이만큼 올림)
 
-  var PITCH_N     = 0.030;     // 최대 가속도에서의 피치각 (rad ≈ 1.7°)
-  var SLACK_W     = 26.0;      // 유격 스프링 각진동수
-  var SLACK_Z     = 0.52;      // 유격 감쇠비 (<1 → 살짝 출렁)
+  var PITCH_N     = 0.046;     // 최대 가속도에서의 피치각 (rad ≈ 2.6°)
+  var SLACK_W     = 13.5;      // 유격 스프링 각진동수 (낮을수록 파동이 천천히 흐른다)
+  var SLACK_Z     = 0.42;      // 유격 감쇠비 (<1 → 살짝 출렁)
   var JOLT_W      = 19.0;      // 충격 전달 스프링
   var JOLT_Z      = 0.30;
 
-  var PITCH_MAX   = 0.045;
+  var PITCH_MAX   = 0.058;
   var PITCH_W     = 11.5;
   var PITCH_Z     = 0.42;
   var ROLL_K      = 0.0085;    // rad per m/s²  (곡선 원심력)
@@ -87,17 +105,33 @@
   var BOUNCE_A    = 0.011;     // 선로 요철 상하 진폭 (m)
   var BOUNCE_R    = 0.013;     // 요철에서 오는 롤 (rad)
 
-  /* 시간 예산 — SPEC §6 "총 2.2~3.4초, 거리에 비례" */
-  var T_PREP      = 0.18;
-  var T_DWELL     = 0.08;
-  var T_POINTS    = 0.20;      // 분기기 정지 대기 (블레이드 회전은 이보다 길게 이어진다)
+  /* 시간 예산 */
+  var T_PREP      = 0.30;      // 브레이크 해제 + 유격 take-up (차체가 아니라 연결기가 먼저 움직인다)
+  var T_DWELL     = 0.09;
+  var T_POINTS    = 0.18;      // 분기기 정지 대기 (블레이드 회전은 이보다 길게 이어진다)
   var T_BLADE     = 0.35;      // 포인트 블레이드 회전 시간 (SPEC §3.6)
   var T_HITSTOP   = 0.060;
-  var T_SETTLE    = 0.34;
-  /* 고정 오버헤드 0.86s + 주행 [1.35, 2.55]s → 총 2.21 ~ 3.41s (SPEC §6) */
-  var T_RUN_MIN   = 1.35;
-  var T_RUN_MAX   = 2.55;
-  var D_KNEE      = 95.0;      // 거리에 따라 부드럽게 길어지는 무릎 (하드 클램프 금지)
+  var T_SETTLE    = 0.26;
+
+  /* 주행 시간은 '총 주행거리'에서 나온다.  거리가 길수록 길어지되 포화시켜
+     최고 속도가 폭주하지 않게 한다 (하드 클램프 금지 — 매끈한 지수 무릎). */
+  var TD_BASE     = 0.30;
+  var TD_SPAN     = 6.70;
+  var TD_KNEE     = 84.0;
+  var TD_MAX      = 5.60;
+
+  /* 구간별 램프 = 비율 × 구간시간, 아래/위로 클램프.  램프 길이가 무게감을 만든다. */
+  var R_ACC = 0.36, ACC_MIN = 0.26, ACC_MAX = 1.25;   // 0 → 순항
+  var R_BRK = 0.24, BRK_MIN = 0.18, BRK_MAX = 0.85;   // 순항 → 크리프
+  var R_CRP = 0.16, CRP_MIN = 0.10, CRP_MAX = 0.60;   // 크리프 → 정지
+  var CREEP_PROPEL = 1.5;      // 접촉 직전 기어드는 속도 (m/s)
+  var CREEP_PULL   = 2.4;      // 견인 끝(반전)은 접촉이 아니라 조금 빠르게
+  var CRP_PULL     = 0.55;     // 그리고 크리프 구간 자체도 짧게
+
+  /* 이 시간 예산에서 나오는 최고속의 대표값 (실측 25~32 m/s).  아직 한 번도 움직이지
+     않았을 때 Motion.maxSpeed 가 돌려줄 값이자, 내부 사운드 정규화의 기준이다.
+     ※ 상수 자체가 최고속을 '정하지' 않는다 — 실제 값은 legPlan 이 거리에서 유도한다. */
+  var TOP_NOMINAL = 30.0;
 
   var PHYS_DT     = 1 / 240;   // 스프링 서브스텝
   var MAX_DT      = 0.05;      // 탭 전환 등으로 dt 가 튀는 것 방지
@@ -118,6 +152,11 @@
   var idleDecay = 0;           // 정지 후 스프링이 잦아드는 동안만 갱신
   var job = null;              // 진행 중인 이동 job
   var profCache = Object.create(null);
+  var profCacheN = 0;
+  /* 이번(또는 마지막) 이동에서 나올 최고 속도.  최고속은 상수가 아니라
+     (구간 거리 ÷ 구간 시간) 에서 나오므로 이동마다 다르다 — 40-audio 로 소리를
+     보내는 90-game 이 speed 를 0~1 로 정규화하려면 이 값이 필요하다. */
+  var movePeak = 0;
 
   /* 스크래치 */
   var _pe = new THREE.Vector3(), _pw = new THREE.Vector3();
@@ -329,7 +368,7 @@
       var v = ds / dt;
       var a = (v - r.vEast) / dt;
       r.vEast = v;
-      r.aEast = U.damp(r.aEast, a, 24, dt);
+      r.aEast = U.damp(r.aEast, a, 18, dt);
       var dyaw = wrapPi(yaw - r.prevYaw);
       var kRaw = Math.abs(ds) > 1e-4 ? U.clamp(dyaw / ds, -0.25, 0.25) : r.kappa;
       r.kappa = U.damp(r.kappa, kRaw, 14, dt);
@@ -531,36 +570,56 @@
 
   /* ── 속도 프로파일 ──────────────────────────────────────────── */
 
+  /* smootherstep 과 그 도함수 (양 끝에서 기울기 0 → 저크 제한) */
+  function sstep(x) { return x <= 0 ? 0 : (x >= 1 ? 1 : x * x * x * (x * (x * 6 - 15) + 10)); }
+  function sdot(x) { if (x <= 0 || x >= 1) return 0; var q = 1 - x; return 30 * x * x * q * q; }
+
   /**
-   * 정규화 위치 테이블을 만든다.  속도 곡선은
-   *   [0,r1]  smootherstep 상승  (저크 제한 S-curve — 양 끝에서 저크 0)
-   *   [r1,r2] 순항
-   *   [r2,1]  긴 감속 꼬리 + 크리프 항 (마지막 구간은 아주 천천히)
+   * 저크 제한 속도 프로파일.  정규화 시간 τ∈[0,1] → 정규화 속도 v∈[0,1]:
+   *   [0 , r1)   가속 램프   smootherstep 상승
+   *   [r1, r2)   순항        1
+   *   [r2, r3)   제동 램프   1 → cr
+   *   [r3, 1 ]   크리프      cr → 0        (cr = 크리프속도 / 최고속도)
+   * 위치 테이블 p 는 ∫v 를 1 로 정규화한 것 → 실제 위치 = 거리·p(τ).
    */
-  function profile(r1, r2, tailPow, creep) {
-    var key = r1 + '|' + r2 + '|' + tailPow + '|' + creep;
+  function makeProfile(r1, r2, r3, cr) {
+    var key = (r1 * 200 | 0) + '|' + (r2 * 200 | 0) + '|' + (r3 * 200 | 0) + '|' + (cr * 400 | 0);
     if (profCache[key]) return profCache[key];
-    var N = 256, v = new Float32Array(N + 1), p = new Float32Array(N + 1), i;
-    for (i = 0; i <= N; i++) {
-      var tau = i / N, vv;
-      if (tau < r1) vv = U.smootherstep(tau / r1);
-      else if (tau < r2) vv = 1;
-      else {
-        var u = (tau - r2) / (1 - r2);
-        var q = Math.max(0, 1 - u);
-        vv = Math.pow(q, tailPow) * (1 - creep) + creep * Math.pow(q, 0.34);
-      }
-      v[i] = vv;
-    }
-    var acc = 0;
+    var prof = { r1: r1, r2: r2, r3: r3, cr: cr, p: null, I: 1 };
+    var N = 1024, p = new Float32Array(N + 1), i, acc = 0, vPrev = profVel(prof, 0);
     p[0] = 0;
-    for (i = 1; i <= N; i++) { acc += (v[i - 1] + v[i]) * 0.5 / N; p[i] = acc; }
+    for (i = 1; i <= N; i++) {
+      var vv = profVel(prof, i / N);
+      acc += (vPrev + vv) * 0.5 / N;
+      p[i] = acc; vPrev = vv;
+    }
     if (acc > 1e-6) for (i = 0; i <= N; i++) p[i] /= acc;
     p[N] = 1;
-    /* I = ∫v dτ → 최고속도 = 거리/(시간·I).  r1 은 가속 램프 길이 (최대 저크 계산용) */
-    var prof = { p: p, I: Math.max(acc, 1e-3), r1: r1 };
-    profCache[key] = prof;
+    prof.p = p; prof.I = Math.max(acc, 1e-3);
+    if (profCacheN > 40) { profCache = Object.create(null); profCacheN = 0; }
+    profCache[key] = prof; profCacheN++;
     return prof;
+  }
+
+  /** 정규화 속도 v(τ) ∈ [0,1] */
+  function profVel(prof, tau) {
+    if (tau <= 0 || tau >= 1) return 0;
+    var r1 = prof.r1, r2 = prof.r2, r3 = prof.r3, cr = prof.cr;
+    if (tau < r1) return sstep(tau / r1);
+    if (tau < r2) return 1;
+    if (tau < r3) return cr + (1 - cr) * sstep(1 - (tau - r2) / Math.max(r3 - r2, 1e-6));
+    return cr * sstep(1 - (tau - r3) / Math.max(1 - r3, 1e-6));
+  }
+
+  /** dv/dτ — 해석적 가속도.  수치 미분과 달리 계단/노이즈가 없어 피치·유격이 깨끗하다 */
+  function profAcc(prof, tau) {
+    if (tau <= 0 || tau >= 1) return 0;
+    var r1 = prof.r1, r2 = prof.r2, r3 = prof.r3, cr = prof.cr, w;
+    if (tau < r1) return sdot(tau / r1) / r1;
+    if (tau < r2) return 0;
+    if (tau < r3) { w = Math.max(r3 - r2, 1e-6); return -(1 - cr) * sdot(1 - (tau - r2) / w) / w; }
+    w = Math.max(1 - r3, 1e-6);
+    return -cr * sdot(1 - (tau - r3) / w) / w;
   }
 
   function profAt(prof, tau) {
@@ -571,14 +630,37 @@
     return p[i] + (p[i + 1] - p[i]) * (f - i);
   }
 
-  /** 이 구간에서 나올 최고 가속도 — 피치/유격을 이 값으로 정규화해야 saturate 하지 않는다 */
-  function peakAccel(prof, dist, dur) {
-    var vPeak = dist / Math.max(dur * prof.I, 1e-3);
-    return Math.max(1e-3, 1.875 * vPeak / Math.max(prof.r1 * dur, 1e-3));
+  /**
+   * 거리 D 를 dur 초에 덮는 저크 제한 프로파일을 설계한다.
+   * 램프 시간은 dur 에 비례(상·하한 클램프)하고, 최고 속도 V 는 거리에서 유도된다:
+   *   D = V·(0.5·Ta + Tc + 0.5·Tb) + 0.5·cV·(Tb + Tz)
+   * 순항(Tc)이 0 이하로 떨어지면 자연히 삼각 프로파일이 된다.
+   */
+  function legPlan(D, dur, propel) {
+    D = Math.max(0.02, D);
+    dur = Math.max(0.12, dur);
+    var Ta = U.clamp(R_ACC * dur, ACC_MIN, ACC_MAX);
+    var Tb = U.clamp(R_BRK * dur, BRK_MIN, BRK_MAX);
+    var Tz = U.clamp(R_CRP * dur, CRP_MIN, CRP_MAX) * (propel ? 1 : CRP_PULL);
+    var sum = Ta + Tb + Tz, lim = dur * 0.97;
+    if (sum > lim) { var f = lim / sum; Ta *= f; Tb *= f; Tz *= f; sum = lim; }
+    var Tc = dur - sum;
+    var cV = propel ? CREEP_PROPEL : CREEP_PULL;
+    var denom = Tc + 0.5 * Ta + 0.5 * Tb;
+    var V = (D - 0.5 * cV * (Tb + Tz)) / denom;
+    if (!(V > cV * 1.25)) {
+      /* 아주 짧은 이동 — 크리프 자체를 낮춰 삼각 프로파일로 만든다 */
+      cV = Math.max(0.10, 0.30 * D / dur);
+      V = Math.max(cV * 1.3, (D - 0.5 * cV * (Tb + Tz)) / denom);
+    }
+    var prof = makeProfile(Ta / dur, 1 - (Tb + Tz) / dur, 1 - Tz / dur, U.clamp(cV / V, 0, 0.9));
+    var vPeak = D / Math.max(dur * prof.I, 1e-4);
+    return {
+      prof: prof, dur: dur, vPeak: vPeak,
+      /* 가속 램프의 최대 가속도 — 피치·유격은 이 값으로 정규화한다 (제동은 더 세게 나와 클램프됨) */
+      aPeak: Math.max(1e-3, 1.875 * vPeak / Ta)
+    };
   }
-
-  var PROF_PULL   = [0.20, 0.66, 1.50, 0.09];
-  var PROF_PROPEL = [0.18, 0.56, 2.00, 0.15];
 
   /* ── 분기기 블레이드 ────────────────────────────────────────── */
 
@@ -728,26 +810,30 @@
 
     var dA = runA ? runA.total : 0, dB = runB ? runB.total : 0;
     var tScale = reduced ? 0.6 : 1;
-    /* 거리에 따라 부드럽게 길어진다. 짧은 이동도 지루하지 않고 긴 이동도 싸구려로 안 보이게 */
-    var Trun = (T_RUN_MIN + (T_RUN_MAX - T_RUN_MIN) *
-                (1 - Math.exp(-(dA + dB) / D_KNEE))) * tScale;
+    /* 총 주행거리 → 주행 시간.  거리가 길수록 길어지되 포화 → 최고속도가 정직하게 따라온다. */
+    var Tdrive = Math.min(TD_MAX, TD_BASE + TD_SPAN * (1 - Math.exp(-(dA + dB) / TD_KNEE))) * tScale;
     /* 거리 비례로 나누되 상수항을 더해 짧은 구간이 폭력적으로 빨라지지 않게.
-       추진(runB)에 15% 가중 — 접촉으로 이어지는 구간이라 여유가 필요하다. */
-    var wA = dA + 12, wB = (dB + 12) * 1.15;
+       추진(runB)에 12% 가중 — 접촉으로 이어지는 구간이라 크리프 여유가 필요하다. */
+    var wA = dA + 4, wB = (dB + 4) * 1.12;
     var TA, TB;
-    if (runA && runB) {
-      TA = Math.max(0.35 * tScale, Trun * wA / (wA + wB));
-      TB = Math.max(0.50 * tScale, Trun - TA);
-    } else if (runA) { TA = Trun; TB = 0; } else { TA = 0; TB = Trun; }
+    if (runA && runB) { TA = Tdrive * wA / (wA + wB); TB = Tdrive - TA; }
+    else if (runA) { TA = Tdrive; TB = 0; }
+    else { TA = 0; TB = Tdrive; }
+
+    var legA = runA ? legPlan(dA, TA, false) : null;
+    var legB = runB ? legPlan(dB, TB, true) : null;
+    /* 이 이동의 최고속을 공개한다 — 90-game 이 엔진음 load 를 0~1 로 정규화할 때 쓴다.
+       (구간이 둘이면 둘 중 빠른 쪽이 이 이동의 최고속이다.) */
+    movePeak = Math.max(legA ? legA.vPeak : 0, legB ? legB.vPeak : 0);
 
     var plan = [{ p: 'prep', d: T_PREP * tScale }];
     if (runA) {
-      plan.push({ p: 'pull', d: TA, run: runA, prof: profile(PROF_PULL[0], PROF_PULL[1], PROF_PULL[2], PROF_PULL[3]) });
+      plan.push({ p: 'pull', d: legA.dur, run: runA, leg: legA });
       plan.push({ p: 'dwell', d: T_DWELL * tScale });
     }
     if (runB) {
       plan.push({ p: 'points', d: T_POINTS * tScale });
-      plan.push({ p: 'propel', d: TB, run: runB, prof: profile(PROF_PROPEL[0], PROF_PROPEL[1], PROF_PROPEL[2], PROF_PROPEL[3]) });
+      plan.push({ p: 'propel', d: legB.dur, run: runB, leg: legB });
       plan.push({ p: 'impact', d: reduced ? 0.012 : T_HITSTOP });
     }
     plan.push({ p: 'settle', d: T_SETTLE * tScale });
@@ -757,13 +843,15 @@
       fin: fin, plan: plan, pi: -1, ph: '', t: 0, dur: 1,
       rake: rake, standing: standing, pitchN: pitchN, n: n,
       runA: runA, runB: runB, run: null, prof: null, runEnd: 0,
-      u: 0, du: 0, ddu: 0, warm: false, uEffPrev: null,
+      vPeak: 0, u: 0, du: 0, ddu: 0, warm: false, uEffPrev: null,
       sig: new Float64Array(n), sigV: new Float64Array(n), sigT: 0,
       finalPose: finalPose, after: after, target: target,
       blades: findBlades(target), bladesPrev: null, bladeT: 0, bladeRun: false, bladeTime: 0,
       load: 0, squealed: false, impacted: false, dustT: 0
     };
     for (i = 0; i < n; i++) { var rr = rt[rake[i]]; if (rr) rr.prevBack = 0; }
+    /* prep 단계도 첫 구간의 스케일을 쓴다 (유격 take-up 때 피치가 튀지 않게) */
+    accScale = 1 / (legA || legB).aPeak;
     busy = true;
     idleDecay = 0;
     advance();
@@ -774,15 +862,23 @@
     if (!j) return;
     j.pi++;
     if (j.pi >= j.plan.length) { finishJob(); return; }
-    var st = j.plan[j.pi];
+    var st = j.plan[j.pi], i;
     var prevRun = j.run;
     j.ph = st.p; j.dur = Math.max(1e-4, st.d); j.t = 0;
-    j.prof = st.prof || null;
+    j.prof = st.leg ? st.leg.prof : null;
+    j.vPeak = st.leg ? st.leg.vPeak : 0;
 
     switch (j.ph) {
       case 'prep':
         j.run = j.runA || j.runB; j.u = 0; j.runEnd = 0;
         A('hiss');                                   // 브레이크 해제
+        /* 화면이 죽어 있지 않게 — 브레이크가 풀리며 차체가 앞에서부터 살짝 들썩인다 */
+        if (!reduced) {
+          for (i = 0; i < j.n; i++) {
+            var rp = rt[j.rake[i]];
+            if (rp) { rp.joltAmp = 0.050 * Math.pow(0.80, i); rp.joltWait = 0.055 * i; }
+          }
+        }
         break;
       case 'pull':
         j.run = j.runA; j.u = 0; j.runEnd = j.runA.total;
@@ -814,7 +910,7 @@
     }
     if (j.run !== prevRun) j.uEffPrev = null;    // 경로가 바뀌면 속도 미분을 한 프레임 건너뛴다
     /* 이 구간의 최고 가속도로 피치·유격을 정규화한다 (시간 압축과 무관하게 같은 느낌) */
-    if (j.prof && j.runEnd > 0) accScale = 1 / peakAccel(j.prof, j.runEnd, j.dur);
+    if (st.leg) accScale = 1 / st.leg.aPeak;
   }
 
   function doImpact() {
@@ -843,9 +939,15 @@
       q.joltWait = 0.042 * i;
       if (i === 0) { q.bufW = q.bufWT = 0.22; }
     }
-    /* 편성: 뒤쪽으로 압축 파동 */
+    /* 편성: 부딪힌 동쪽 끝에서 기관차 쪽으로 압축 파동이 되돌아 흐른다 */
     j.sigT = -SLACK_H;
     for (i = 1; i < j.n; i++) j.sigV[i] -= 0.85 * SLACK_W * SLACK_H * Math.pow(0.87, i - 1);
+    for (i = j.n - 1; i >= 0; i--) {
+      var rr = rt[j.rake[i]];
+      if (!rr) continue;
+      rr.joltAmp = 0.115 * Math.pow(0.74, (j.n - 1) - i);
+      rr.joltWait = 0.045 * ((j.n - 1) - i);
+    }
     j.impacted = true;
   }
 
@@ -899,18 +1001,17 @@
 
     if (j.prof) {
       j.u = j.runEnd * profAt(j.prof, frac);
-      var v = d > 1e-6 ? (j.u - u0) / d : 0;
-      var a = d > 1e-6 ? (v - j.du) / d : 0;
-      j.du = v;
-      j.ddu = U.damp(j.ddu, a, 22, d);
+      /* 속도·가속도는 해석적으로 — 테이블 미분의 계단 노이즈가 피치·유격을 더럽히지 않는다 */
+      j.du = profVel(j.prof, frac) * j.vPeak;                 // m/s (u 방향)
+      j.ddu = profAcc(j.prof, frac) * j.vPeak / j.dur;        // m/s²
       moving = true;
       /* 견인(draft)=+, 압축(buff)=− :  σ = −runDir · â · SLACK/2   (â = 정규화 가속도) */
       j.sigT = -j.run.dir * U.clamp(j.ddu * accScale, -1, 1) * SLACK_H;
       if (j.ph === 'pull' && !j.squealed && frac > 0.74) { j.squealed = true; A('squeal'); }
     } else if (j.ph === 'prep') {
-      /* 움직이기 전에 유격부터 풀린다 — 엔진이 부하를 받는 소리와 함께 */
+      /* 움직이기 전에 유격부터 풀린다 — 기관차만 먼저 스르륵 나가고 편성은 그대로 있다 */
       var dir0 = j.run ? j.run.dir : -1;
-      j.sigT = -dir0 * SLACK_H * 0.6 * U.smooth(frac);
+      j.sigT = -dir0 * SLACK_H * 0.85 * U.smootherstep(frac);
       j.du = 0; j.ddu = 0;
     } else if (j.ph === 'settle') {
       /* 유격이 중립으로 돌아오면서 기관차가 압축분만큼 뒤로 밀려난다 = 완충기 반동 */
@@ -932,8 +1033,9 @@
       if (j.bladeT >= 1) { j.bladeRun = false; j.bladesPrev = null; }
     }
 
-    var du = j.u - u0;
-    curVel = (j.run ? j.run.dir : 1) * (d > 1e-6 ? du / d : 0);
+    /* 프로파일 구간은 해석적 속도(정직한 m/s), 나머지 구간은 실제 변위로 — Audio.roll 소비 */
+    curVel = j.prof ? (j.run.dir * j.du * speedScale)
+                    : ((j.run ? j.run.dir : 1) * (d > 1e-6 ? (j.u - u0) / d : 0));
     curSpeed = Math.abs(curVel);
 
     /* 유격 파동 — 캐스케이드 스프링. 뒤 칸일수록 한 단계씩 늦게 반응한다 */
@@ -948,9 +1050,10 @@
         else if (j.sig[i] < -SLACK_H) { j.sig[i] = -SLACK_H; if (j.sigV[i] < 0) j.sigV[i] *= -0.25; }
       }
     }
-    /* 정차 단계에서는 유격을 정확히 0 으로 수렴시킨다 → 최종 위치가 패킹 결과와 완전히 일치 */
+    /* 정차 단계 — 앞쪽 35% 는 파동이 뒤에서부터 자연스럽게 닫히도록 두고,
+       나머지에서 유격을 정확히 0 으로 수렴시킨다 → 최종 위치가 패킹 결과와 완전히 일치 */
     if (j.ph === 'settle') {
-      var keep = 1 - U.smootherstep(frac);
+      var keep = 1 - U.smootherstep(U.clamp01((frac - 0.35) / 0.65));
       for (i = 1; i < n; i++) { j.sig[i] *= keep; j.sigV[i] *= keep; }
     }
 
@@ -971,12 +1074,14 @@
       if (i > 0) back += j.pitchN[i] + j.sig[i];
       var r = rt[j.rake[i]];
       if (!r) continue;
-      if (!j.warm) r.prevBack = back;
-      var db = back - r.prevBack;
-      r.prevBack = back;
       preDyn(r, d);
-      /* 완충기 목표: 압축(σ<0)량을 조금 과장해서 보이게 한다 (디오라마 거리에서 읽히도록) */
-      var cmp = Math.min(Math.max(0, -j.sig[i]) * 1.6, BUF_MAX);
+      /* jolt(충격·브레이크 해제 여진)를 편성 차량에도 실제 위치로 반영한다 */
+      var backJ = back + r.jolt;
+      if (!j.warm) r.prevBack = backJ;
+      var db = backJ - r.prevBack;
+      r.prevBack = backJ;
+      /* 완충기 목표: 압축(σ<0)량을 행정 전체로 매핑한다 (디오라마 거리에서 읽히도록) */
+      var cmp = Math.min(Math.max(0, -j.sig[i]) * BUF_GAIN, BUF_MAX);
       if (i > 0) {
         r.bufWT = cmp;
         var pr = rt[j.rake[i - 1]];
@@ -986,7 +1091,7 @@
         /* 최동단 차량의 동쪽 면은 접촉 순간에만 눌린다 */
         r.bufET = j.impacted ? Math.max(0, r.bufET - d * 0.75) : 0;
       }
-      runPos(run, uEff + run.dir * back, probe);
+      runPos(run, uEff + run.dir * backJ, probe);
       placeVehicle(r, probe.track, probe.s, run.dir * duEff + db, d, moving);
     }
     j.warm = true;
@@ -1005,7 +1110,7 @@
 
     /* 엔진 · 배기 · 롤링 사운드 */
     var accN = U.clamp(Math.max(0, j.ddu) * accScale, 0, 1);
-    var spdN = U.clamp(curSpeed / 45, 0, 1);
+    var spdN = U.clamp(curSpeed / (movePeak > 1 ? movePeak : TOP_NOMINAL), 0, 1);
     var loadT = (j.ph === 'prep') ? 0.62 * U.smooth(frac)
               : (j.ph === 'pull' || j.ph === 'propel') ? U.clamp(0.28 + spdN * 0.45 + accN * 0.55, 0, 1)
               : (j.ph === 'settle') ? 0.07 : 0.20;
@@ -1125,6 +1230,12 @@
   };
   Object.defineProperty(Motion, 'isBusy', { get: function () { return busy; }, enumerable: true });
   Object.defineProperty(Motion, 'speed', { get: function () { return curSpeed; }, enumerable: true });
+  /* 이번(없으면 마지막, 그것도 없으면 대표값) 이동의 최고 속도 — 소리 정규화용.
+     90-game.js 의 engineLoad() 가 이 이름을 찾는다. topSpeed 는 같은 값의 별칭. */
+  Object.defineProperty(Motion, 'maxSpeed',
+    { get: function () { return movePeak > 1 ? movePeak : TOP_NOMINAL; }, enumerable: true });
+  Object.defineProperty(Motion, 'topSpeed',
+    { get: function () { return movePeak > 1 ? movePeak : TOP_NOMINAL; }, enumerable: true });
   Object.defineProperty(Motion, 'velocity', { get: function () { return curVel; }, enumerable: true });
   Object.defineProperty(Motion, 'speedScale', { get: function () { return speedScale; }, enumerable: true });
 
