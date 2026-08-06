@@ -269,6 +269,123 @@
     };
     function gb() { bindThree(); return new GB(); }
 
+    /* ── 이미 자리를 잡은 메시들의 사후 병합 ─────────────────────────
+       GB 는 "만들면서" 합치는 도구다. 선로·분기기·차막이처럼 이미 씬에 배치된
+       정적 메시는 월드 행렬째로 굽어야 한다. 드로우콜은 메시 수와 무관해지고
+       **쓰이는 머티리얼 수**까지 내려간다.
+       · 멀티 머티리얼 메시는 group 단위로 쪼개 같은 머티리얼끼리 모은다.
+       · position/normal/uv/uv1/color 를 옮긴다(uv1 = aoMap 채널. 빠진 조각은
+         uv 를 복사해 넣는다 — 안 채우면 그 조각만 AO 텍스처의 한 점을 물고 늘어진다).
+       ───────────────────────────────────────────────────────────── */
+    var MG_ATTR = ['position', 'normal', 'uv', 'uv1', 'color'];
+
+    /** 비인덱스 지오메트리의 [start, start+count) 정점 구간을 떼어 낸다 */
+    function sliceGeo(g, start, count) {
+      var out = new T.BufferGeometry(), k, a, it;
+      for (k = 0; k < MG_ATTR.length; k++) {
+        a = g.getAttribute(MG_ATTR[k]);
+        if (!a || !a.array || !a.array.slice) continue;
+        it = a.itemSize;
+        out.setAttribute(MG_ATTR[k],
+          new T.BufferAttribute(Float32Array.from(a.array.slice(start * it, (start + count) * it)), it));
+      }
+      return out;
+    }
+
+    /**
+     * 정적 메시 목록 → 메시 1개. 실패하면 null (그러면 호출자가 원본을 그냥 둔다).
+     * list 의 지오메트리는 건드리지 않는다(복사본을 변형한다).
+     */
+    function mergeMeshes(list, name, cast, recv) {
+      bindThree();
+      if (!list || !list.length) return null;
+      var mats = [], buckets = [], i, j, c;
+      function bi(m) {
+        var x = mats.indexOf(m);
+        if (x < 0) { x = mats.length; mats.push(m); buckets.push([]); }
+        return x;
+      }
+      for (i = 0; i < list.length; i++) {
+        var ms = list[i], g = ms.geometry;
+        if (!g || !g.getAttribute('position')) continue;
+        if (!g.getAttribute('normal')) g.computeVertexNormals();
+        var ni = g.index ? g.toNonIndexed() : g.clone();
+        ms.updateWorldMatrix(true, false);
+        ni.applyMatrix4(ms.matrixWorld);           // 노멀까지 같이 변환된다
+        var mm = ms.material, np = ni.getAttribute('position').count;
+        /* 개체마다 다른 색(나무 잎 색 편차 등)은 정점색에 곱해 넣는다 — 그래야
+           재질이 하나로 유지되고 드로우콜이 색 수만큼 갈라지지 않는다.
+           (정점색은 머티리얼 색에 곱해진다는 이 코드베이스의 규약 그대로) */
+        var tint = ms.userData && ms.userData.mergeTint;
+        if (tint) {
+          var ca = ni.getAttribute('color'), cArr;
+          if (!ca) {
+            cArr = new Float32Array(np * 3);
+            for (j = 0; j < cArr.length; j++) cArr[j] = 1;
+            ca = new T.BufferAttribute(cArr, 3);
+            ni.setAttribute('color', ca);
+          }
+          cArr = ca.array;
+          for (j = 0; j + 2 < cArr.length; j += 3) {
+            cArr[j] *= tint.r; cArr[j + 1] *= tint.g; cArr[j + 2] *= tint.b;
+          }
+        }
+        if (Array.isArray(mm) && ni.groups && ni.groups.length) {
+          for (j = 0; j < ni.groups.length; j++) {
+            var gr = ni.groups[j];
+            c = Math.min(gr.count, np - gr.start);
+            if (c > 0) buckets[bi(mm[gr.materialIndex] || mm[0])].push(sliceGeo(ni, gr.start, c));
+          }
+          ni.dispose();
+        } else {
+          buckets[bi(Array.isArray(mm) ? mm[0] : mm)].push(ni);
+        }
+      }
+      var total = 0, hasUv1 = false, hasCol = false, gg;
+      for (i = 0; i < buckets.length; i++) for (j = 0; j < buckets[i].length; j++) {
+        gg = buckets[i][j];
+        total += gg.getAttribute('position').count;
+        if (gg.getAttribute('uv1')) hasUv1 = true;
+        if (gg.getAttribute('color')) hasCol = true;
+      }
+      if (!total) return null;
+      var pos = new Float32Array(total * 3), nor = new Float32Array(total * 3),
+          uv = new Float32Array(total * 2),
+          uv1 = hasUv1 ? new Float32Array(total * 2) : null, col = null;
+      if (hasCol) { col = new Float32Array(total * 3); for (i = 0; i < col.length; i++) col[i] = 1; }
+      var geo = new T.BufferGeometry(), off = 0;
+      for (i = 0; i < buckets.length; i++) {
+        var st = off;
+        for (j = 0; j < buckets[i].length; j++) {
+          gg = buckets[i][j];
+          var p = gg.getAttribute('position'), n = gg.getAttribute('normal'),
+              t = gg.getAttribute('uv'), t1 = gg.getAttribute('uv1'), cA = gg.getAttribute('color');
+          c = p.count;
+          pos.set(p.array, off * 3);
+          if (n) nor.set(n.array, off * 3);
+          if (t) uv.set(t.array, off * 2);
+          if (uv1) uv1.set((t1 || t) ? (t1 || t).array : new Float32Array(c * 2), off * 2);
+          if (col && cA) col.set(cA.array, off * 3);
+          off += c;
+          gg.dispose();
+        }
+        if (off > st) geo.addGroup(st, off - st, i);
+      }
+      geo.setAttribute('position', new T.BufferAttribute(pos, 3));
+      geo.setAttribute('normal', new T.BufferAttribute(nor, 3));
+      geo.setAttribute('uv', new T.BufferAttribute(uv, 2));
+      if (uv1) geo.setAttribute('uv1', new T.BufferAttribute(uv1, 2));
+      if (col) geo.setAttribute('color', new T.BufferAttribute(col, 3));
+      geo.computeBoundingSphere();
+      geo.computeBoundingBox();
+      _tris += total / 3;
+      var out = new T.Mesh(reg(geo), mats.length === 1 ? mats[0] : mats.slice());
+      out.name = name || 'merged';
+      out.castShadow = cast !== false;
+      out.receiveShadow = recv !== false;
+      return out;
+    }
+
     /* ══════════════════════════════════════════════════════════════════
        3. 프리미티브 헬퍼
        ══════════════════════════════════════════════════════════════════ */
@@ -754,7 +871,10 @@
         bindThree();
         var V = SLP_VAR[v % SLP_N];
         var LEN = V[0], TH = V[1], WID = V[2], WEAR = V[3];
-        var g = new T.BoxGeometry(WID, TH, LEN, 1, 1, 5);
+        /* 길이 방향 분할 5 → 3. 끝단 마모(t > 0.66 구간)를 표현할 마디는 그대로
+           남고 삼각형은 44 → 28 개가 된다. 침목은 야드 전체에 1,200 개가 깔려
+           이 한 줄이 3만 삼각형이다 (2.6m × 0.25m 짜리 판자다). */
+        var g = new T.BoxGeometry(WID, TH, LEN, 1, 1, 3);
         var n = U.noise2D(700 + v, 0);
         var p = g.getAttribute('position');
         for (var i = 0; i < p.count; i++) {
@@ -939,12 +1059,16 @@
       if (opts.sleepers !== false) {
         var pitch = opts.sleeperPitch || SLEEPER_PITCH;
         var count = Math.max(2, Math.floor(total / pitch));
-        var per = Math.ceil(count / SLP_N);
+        /* 변형 4종 × 재질 2종 × 선로 5벌 = 드로우콜 40. 실제로 화면에서 구분되는
+           건 길이·두께 차이라 2종이면 충분하다(인스턴스마다 ±7 % 스케일 지터가
+           따로 붙는다). 변형 정의(SLP_VAR)는 분기기 베어러가 계속 쓴다. */
+        var SLP_USE = 2;
+        var per = Math.ceil(count / SLP_USE);
         var sm = [instMat('sleeper'), fastenerMat()];      // 그룹 0 목재 / 1 체결구
         var mtx = new T.Matrix4(), q = new T.Quaternion(), eu = new T.Euler(),
             pv = new T.Vector3(), sv = new T.Vector3(), cc = new T.Color();
         var imeshes = [], fill = [];
-        for (var v = 0; v < SLP_N; v++) {
+        for (var v = 0; v < SLP_USE; v++) {
           var im = new T.InstancedMesh(sleeperGeo(v), sm, per);
           im.name = 'sleepers' + v;
           im.castShadow = true; im.receiveShadow = true;
@@ -956,7 +1080,7 @@
           // (더 크게 흔들면 침목끼리 겹쳐서 "부설된 선로"가 아니라 "부서진 선로"로 읽힌다)
           var s = (i + 0.5) * pitch + (r() - 0.5) * 0.06;
           var f = sampleFrames(fine, U.clamp(s, 0, total));
-          var v2 = i % SLP_N, im2 = imeshes[v2];
+          var v2 = i % SLP_USE, im2 = imeshes[v2];
           if (fill[v2] >= per) continue;
           var yaw = Math.atan2(f.tz, f.tx) + (r() - 0.5) * 0.034;         // 곡선에서 방사 정렬
           eu.set((r() - 0.5) * 0.020, -yaw, (r() - 0.5) * 0.030);
@@ -974,7 +1098,7 @@
           im2.setColorAt(fill[v2], tintVar(cc, r, 0.34, r() < 0.16 ? 0.28 : -0.12));
           fill[v2]++;
         }
-        for (var v3 = 0; v3 < SLP_N; v3++) {
+        for (var v3 = 0; v3 < SLP_USE; v3++) {
           imeshes[v3].count = fill[v3];
           imeshes[v3].instanceMatrix.needsUpdate = true;
           if (imeshes[v3].instanceColor) imeshes[v3].instanceColor.needsUpdate = true;
@@ -985,8 +1109,11 @@
 
       /* ── 흩뿌린 자갈 — 실루엣을 깨는 실제 메시 ─────────── */
       if (opts.gravel !== false) {
-        var GV = 3;
-        var gn = Math.max(140, Math.min(820, Math.round(total * 5.4)));
+        /* 알갱이 하나가 삼각형 9개다. 선로 5벌이면 4,100 알 = 3.7만 삼각형을
+           도상 어깨의 잔자갈에 쓰고 있었다. 변형 3 → 2, 개수 820 → 560 으로
+           줄여도 "칼로 자른 듯한 자갈층 끝"은 그대로 흐트러진다. */
+        var GV = 2;
+        var gn = Math.max(120, Math.min(560, Math.round(total * 3.7)));
         var gmat = instMat('gravel'), gim = [];
         var gper = Math.ceil(gn / GV);
         for (var w = 0; w < GV; w++) {
@@ -995,7 +1122,7 @@
           gi.name = 'gravel' + w;
           gim.push(gi);
         }
-        var gfill = [0, 0, 0];
+        var gfill = []; for (var gz = 0; gz < GV; gz++) gfill.push(0);
         var m2 = new T.Matrix4(), q2 = new T.Quaternion(), e2 = new T.Euler(),
             p2 = new T.Vector3(), s2 = new T.Vector3(), c2 = new T.Color();
         for (var k = 0; k < gn; k++) {
@@ -1208,10 +1335,10 @@
       var lv = gb();
       lv.at(boxG(0.72, 0.52, 0.56), MAT('metalDark'), 0, 0.26, 0);
       lv.at(boxG(0.80, 0.07, 0.64), MAT('metalDark'), 0, 0.55, 0);
-      lv.at(cylG(0.032, 0.038, 1.05, 7), PAINT('#d99a26', seed + 3), 0.16, 1.02, 0, 0, 0, -0.22);
-      lv.at(sphereG(0.085, 8, 6), PAINT('#a8332a', seed + 4), 0.38, 1.5, 0);
+      lv.at(cylG(0.032, 0.038, 1.05, 7), PAINT('#d99a26', 0), 0.16, 1.02, 0, 0, 0, -0.22);
+      lv.at(sphereG(0.085, 8, 6), PAINT('#a8332a', 0), 0.38, 1.5, 0);
       lv.at(cylG(0.22, 0.22, 0.10, 10), MAT('metalDark'), -0.22, 0.62, 0);     // 균형추
-      lv.at(boxG(0.16, 0.16, 0.05), PAINT('#d9cbb0', seed + 5), -0.05, 1.18, 0.30);
+      lv.at(boxG(0.16, 0.16, 0.05), PAINT('#d9cbb0', 0), -0.05, 1.18, 0.30);
       var lever = lv.mesh('leverBox');
       lever.position.set(-1.7, 0, sgn * (hg + 1.35));
       lever.rotation.y = -sgn * 0.18;
@@ -1281,8 +1408,8 @@
       // 완충 헤드 2개 (로컬 y=0.75, z=±0.85, −X 를 향한다)
       for (var s = -1; s <= 1; s += 2) {
         B.at(cylXG(0.115, 0.13, 0.46, 12), metal, -0.10, BUF_Y, s * BUF_Z);
-        B.at(cylXG(0.20, 0.205, 0.075, 16), PAINT('#4b5560', seed + 1), -0.36, BUF_Y, s * BUF_Z);
-        B.at(cylXG(0.155, 0.19, 0.05, 14), PAINT('#4b5560', seed + 1), -0.40, BUF_Y, s * BUF_Z);
+        B.at(cylXG(0.20, 0.205, 0.075, 16), PAINT('#4b5560', 0), -0.36, BUF_Y, s * BUF_Z);
+        B.at(cylXG(0.155, 0.19, 0.05, 14), PAINT('#4b5560', 0), -0.40, BUF_Y, s * BUF_Z);
         B.at(boxG(0.20, 0.30, 0.34), metal, 0.10, BUF_Y, s * BUF_Z);
       }
       // 지주 + 표지판 프레임
@@ -1293,9 +1420,9 @@
 
       // 붉은 반사판
       var P = gb();
-      P.at(boxG(0.06, 0.46, 1.55), PAINT('#a8332a', seed + 2), 0, 0, 0);
-      P.at(boxG(0.055, 0.075, 1.62), PAINT('#d9cbb0', seed + 3), -0.012, 0.235, 0);
-      P.at(boxG(0.055, 0.075, 1.62), PAINT('#d9cbb0', seed + 3), -0.012, -0.235, 0);
+      P.at(boxG(0.06, 0.46, 1.55), PAINT('#a8332a', 0), 0, 0, 0);
+      P.at(boxG(0.055, 0.075, 1.62), PAINT('#d9cbb0', 0), -0.012, 0.235, 0);
+      P.at(boxG(0.055, 0.075, 1.62), PAINT('#d9cbb0', 0), -0.012, -0.235, 0);
       var plate = P.mesh('stopPlate');
       plate.position.set(-0.02, 1.78, 0);
       plate.rotation.z = 0.06;
@@ -1552,7 +1679,7 @@
       var steel = MAT('metalDark');
       var z0 = bz == null ? BUF_Z : bz, k = proj == null ? 1 : proj;
       // 드로우콜을 아끼려고 완충기는 전부 한 머티리얼(도장 강판)로 통일한다
-      var face = PAINT(liveryHex || '#4b5560', seed + 21);
+      var face = PAINT(liveryHex || '#4b5560', 0);
       for (var s = -1; s <= 1; s += 2) {
         B.at(cylXG(0.098, 0.104, 0.34 * k, 12), face, dir * 0.17 * k, BUF_Y, s * z0);
         B.at(cylXG(0.185, 0.195, 0.075, 16), face, dir * 0.375 * k, BUF_Y, s * z0);
@@ -2033,8 +2160,8 @@
         }
       }
       brakeWheel(B, steel, -(HX + 0.22), 2.30, -1.05, 0.24);
-      B.at(boxG(0.9, 0.55, 0.06), PAINT('#d9cbb0', seed + 7), 1.9, 2.15, 1.60);   // 번호판
-      B.at(boxG(0.9, 0.55, 0.06), PAINT('#d9cbb0', seed + 7), -1.9, 2.15, -1.60);
+      B.at(boxG(0.9, 0.55, 0.06), PAINT('#d9cbb0', 0), 1.9, 2.15, 1.60);   // 번호판
+      B.at(boxG(0.9, 0.55, 0.06), PAINT('#d9cbb0', 0), -1.9, 2.15, -1.60);
       // 지붕 통풍구 (V0 만)
       if (!VAR) for (var v = -1; v <= 1; v += 2)
         B.at(cylG(0.16, 0.19, 0.20, 8), steel, v * 3.6, 4.42, 0);
@@ -2199,8 +2326,8 @@
       B.at(cylXG(0.10, 0.10, 1.4, 8), steel, 0.6, 0.86, 0);
       B.at(cylG(0.11, 0.11, 0.22, 8), steel, 1.28, 0.92, 0, 0, 0, 0.8);
       // 위험물 표지
-      B.at(boxG(1.05, 0.62, 0.05), PAINT('#d99a26', seed + 9), 0, TY - 0.15, TR - 0.02, 0, 0, 0);
-      B.at(boxG(1.05, 0.62, 0.05), PAINT('#d99a26', seed + 9), 0, TY - 0.15, -TR + 0.02, 0, 0, 0);
+      B.at(boxG(1.05, 0.62, 0.05), PAINT('#d99a26', 0), 0, TY - 0.15, TR - 0.02, 0, 0, 0);
+      B.at(boxG(1.05, 0.62, 0.05), PAINT('#d99a26', 0), 0, TY - 0.15, -TR + 0.02, 0, 0, 0);
       return { deckY: 0.95, noDeck: true };
     }
 
@@ -2255,8 +2382,8 @@
         B.at(boxG(0.11, 1.25, 0.11), wood, st[k], DY + 0.62, s2 * 1.53, 0, 0, s2 * 0.02);
 
       // 화물: 상자 2 + 파이프 다발
-      crateParts(B, PAINT('#8a6a3f', seed + 11), wood, 2.6, 1.5, 2.2, -3.4, DY + 0.79, 0, 0.03, seed + 12);
-      crateParts(B, PAINT('#6d6a5c', seed + 13), wood, 1.9, 1.15, 1.9, -0.5, DY + 0.62, 0.2, -0.06, seed + 14);
+      crateParts(B, PAINT('#8a6a3f', 0), wood, 2.6, 1.5, 2.2, -3.4, DY + 0.79, 0, 0.03, seed + 12);
+      crateParts(B, PAINT('#6d6a5c', 0), wood, 1.9, 1.15, 1.9, -0.5, DY + 0.62, 0.2, -0.06, seed + 14);
       for (var p = 0; p < 6; p++) {
         var row = p < 3 ? 0 : 1, col = p % 3;
         B.at(cylXG(0.24, 0.24, 4.4, 10), rust,
@@ -2436,6 +2563,11 @@
      */
     var _locoPaint = Object.create(null);
     function locoPaint(k, seed) {
+      /* 명도 단계를 0.14 격자로 스냅한다. 원래 k 는 0 / -0.12 / -0.28 / -0.30 /
+         -0.34 / -0.42 여섯 단계였는데, -0.28 과 -0.34 는 화면에서 구분되지 않으면서
+         각각 자기 텍스처 세트(맵·노멀·러프)를 통째로 하나씩 더 만들고 있었다.
+         이 씬은 드로우콜보다 **머티리얼 전환**이 비싸다(실측). */
+      k = Math.round(k / 0.14) * 0.14;
       var key = 'lp' + k.toFixed(3) + '_' + seed;
       if (_locoPaint[key]) return _locoPaint[key];
       var m = MCLONE(PAINT(U.shade('#44515f', k), seed),
@@ -2471,10 +2603,10 @@
         bogieX: 4.35, headstock: HX, bufferHex: '#3a424c',
         bogieOpts: { axlePos: [-1.30, 0, 1.30], frameZ: 1.06, axle: 1.30 }
       });
-      var body = locoPaint(0, seed), warn = PAINT(PAL.warn, seed + 1),
+      var body = locoPaint(0, seed), warn = PAINT(PAL.warn, 0),
           steel = MAT('metalDark'), glass = MAT('glass'),
           step = stepMat(), wood = MAT('wood'), warm = EMIT('#ffd9a0', 0.9);
-      var black = PAINT('#20252c', seed + 4);
+      var black = PAINT('#20252c', 0);
       var B = gb();
 
       var FY = 1.02;                       // 대판(데크) 상면
@@ -2676,7 +2808,7 @@
           lights.push(lens);
           // 표지등(적) — 등함 아래 작은 케이스
           B.at(boxG(0.14, 0.17, 0.17), steel, hx2 + le * 0.03, hy - 0.42, lz * 0.52);
-          B.at(cylXG(0.062, 0.062, 0.05, 8), PAINT(PAL.red, seed + 12),
+          B.at(cylXG(0.062, 0.062, 0.05, 8), PAINT(PAL.red, 0),
                hx2 + le * 0.11, hy - 0.42, lz * 0.52);
         }
       }
@@ -2788,7 +2920,10 @@
      */
     function bladesGeo(n, h, spread, wid, bend, seed) {
       bindThree();
-      var r = U.rng(seed), segs = 3;
+      /* segs 3 → 2 : 잎 한 장이 삼각형 10개 → 6개. 굽음(off = bend·t²)은 중간
+         마디에 그대로 남고, 잃는 것은 잎 중간의 곡률 한 단계뿐이다.
+         잡초·풀뭉치는 개수가 400 포기가 넘어 이 4장이 곧 4만 삼각형이다. */
+      var r = U.rng(seed), segs = 2;
       var pos = [], uvs = [], nrm = [], cols = [], idx = [], vi = 0;
       var UP = 0.58, SIDE = 0.80;                       // 노멀: 위 비율 / 좌우 벌림
       for (var b = 0; b < n; b++) {
@@ -3278,11 +3413,19 @@
       m.castShadow = true; m.receiveShadow = true;
       o.add(m);
       var B = gb();
-      for (var i = 0; i < 5; i++) {                     // 씨앗 이삭
+      /* 씨앗 이삭 — 지름 4.5cm 짜리 알갱이에 구 6×5(48 삼각형)를 쓰고 있었다.
+         잡초가 200 포기라 이 한 줄이 7만 삼각형(화면 전체의 8 %)이었다.
+         줄기는 뚜껑 없는 원기둥, 알갱이는 5×3 구 — 화면에서 3px 짜리다. */
+      /* 줄기와 이삭을 **같은 재질**로 통일한다. 재질이 갈리면 메시가 그룹 2개로
+         쪼개져 드로우콜이 두 배가 되는데(잡초 변종마다 ×2), 두 재질 다 같은 계열의
+         녹색이라 8mm 줄기에서는 구분되지 않는다. 머티리얼 전환은 이 씬에서
+         드로우콜보다 비싸다(실측: 고유 재질 102 → 60 에 +1.5 fps). */
+      var seedM = leafMat(1);
+      for (var i = 0; i < 5; i++) {
         var a = r() * 6.28, rad = r() * 0.3;
-        B.at(cylG(0.008, 0.012, 1.05, 5), MAT('grass'), Math.cos(a) * rad, 0.52, Math.sin(a) * rad,
+        B.at(cylG(0.008, 0.012, 1.05, 5, true), seedM, Math.cos(a) * rad, 0.52, Math.sin(a) * rad,
           (r() - .5) * 0.5, 0, (r() - .5) * 0.5);
-        B.at(sphereG(0.045, 6, 5), leafMat(1), Math.cos(a) * rad * 1.9, 1.02, Math.sin(a) * rad * 1.9,
+        B.at(sphereG(0.045, 5, 3), seedM, Math.cos(a) * rad * 1.9, 1.02, Math.sin(a) * rad * 1.9,
           0, 0, 0, 0.8, 2.4, 0.8);
       }
       o.add(B.mesh('seedHeads'));
@@ -3311,9 +3454,9 @@
       var arm = new T.Object3D();
       arm.position.set(0.10, H - 0.15, 0);
       var A = gb();
-      A.at(boxG(1.55, 0.24, 0.055), PAINT('#a8332a', seed + 1), 0.62, 0, 0);
-      A.at(boxG(0.30, 0.24, 0.06), PAINT('#d9cbb0', seed + 2), 1.20, 0, 0);
-      A.at(boxG(0.34, 0.30, 0.07), PAINT('#a8332a', seed + 1), -0.16, 0, 0);
+      A.at(boxG(1.55, 0.24, 0.055), PAINT('#a8332a', 0), 0.62, 0, 0);
+      A.at(boxG(0.30, 0.24, 0.06), PAINT('#d9cbb0', 0), 1.20, 0, 0);
+      A.at(boxG(0.34, 0.30, 0.07), PAINT('#a8332a', 0), -0.16, 0, 0);
       A.at(cylG(0.055, 0.055, 0.22, 8), MAT('metalDark'), 0, 0, 0, Math.PI / 2, 0, 0);
       // 스펙터클(색유리) 2장
       A.at(torusG(0.135, 0.028, 4, 10), MAT('metalDark'), -0.30, -0.30, 0);
@@ -3388,7 +3531,7 @@
         }
       }
       // 문 + 창문
-      B.at(boxG(1.35, 2.25, 0.07), PAINT('#3f6b4e', seed + 1), -1.2, 1.35, D / 2 + 0.02);
+      B.at(boxG(1.35, 2.25, 0.07), PAINT('#3f6b4e', 0), -1.2, 1.35, D / 2 + 0.02);
       B.at(boxG(0.09, 2.25, 0.05), wood, -1.85, 1.35, D / 2 + 0.06);
       B.at(boxG(1.35, 0.09, 0.05), wood, -1.2, 2.44, D / 2 + 0.06);
       B.at(cylZG(0.022, 0.16, 6), steel, -0.62, 1.30, D / 2 + 0.08);
@@ -3522,7 +3665,7 @@
       var r = U.rng(seed);
       var o = new T.Object3D(); o.name = 'crate';
       var B = gb(), w = U.randRange(r, 0.9, 1.5), h = U.randRange(r, 0.7, 1.2);
-      crateParts(B, PAINT(U.pick(r, ['#8a6a3f', '#6d6a5c', '#7a6244']), seed), MAT('wood'),
+      crateParts(B, PAINT(U.pick(r, ['#8a6a3f', '#6d6a5c', '#7a6244']), 0), MAT('wood'),
         w, h, w * U.randRange(r, 0.8, 1.1), 0, h / 2, 0, r() * 0.4 - 0.2, seed);
       o.add(B.mesh('crate'));
       o.userData.kind = 'prop'; o.userData.prop = 'crate';
@@ -3533,7 +3676,8 @@
     function drumBodyG(seed) {
       return cached('drum' + seed, function () {
         bindThree();
-        var g = new T.CylinderGeometry(0.29, 0.288, 0.86, 20, 5, false);
+        // 14×3 이면 지름 0.6m 짜리 통에 168 삼각형 — 찌그러짐 2군데도 그대로 산다
+        var g = new T.CylinderGeometry(0.29, 0.288, 0.86, 14, 3, false);
         var r = U.rng(seed | 0);
         var a1 = r() * 6.283, y1 = -0.16 + r() * 0.30, d1 = 0.050 + r() * 0.022;
         var a2 = a1 + 1.9 + r() * 2.2, y2 = -0.06 + r() * 0.30, d2 = 0.028 + r() * 0.018;
@@ -3549,7 +3693,7 @@
         }
         p.needsUpdate = true;
         g.computeVertexNormals();
-        _tris += 20 * 5 * 2 + 40;
+        _tris += 14 * 3 * 2 + 28;
         return g;
       });
     }
@@ -3567,20 +3711,22 @@
       var r = U.rng(seed);
       var o = new T.Object3D(); o.name = 'oilDrum';
       var hex = U.pick(r, ['#3f6b4e', '#9e3b2c', '#2f5d97', '#d99a26']);
-      var paint = PAINT(hex, seed), steel = MAT('metalDark'), B = gb();
+      var paint = PAINT(hex, 0), steel = MAT('metalDark'), B = gb();
       B.at(drumBodyG(seed), paint, 0, 0.43, 0);
-      // 롤링 림 2개 — 반경 +4cm, 폭 3cm 의 **실제 토러스** (실루엣이 끊긴다)
-      B.at(torusG(0.298, 0.030, 6, 20), steel, 0, 0.305, 0, Math.PI / 2, 0, 0);
-      B.at(torusG(0.298, 0.030, 6, 20), steel, 0, 0.555, 0, Math.PI / 2, 0, 0);
+      /* 롤링 림 2개 — 반경 +4cm, 폭 3cm 의 **실제 토러스** (실루엣이 끊긴다).
+         단면 6×20 은 링 하나에 240 삼각형이다. 드럼 22개 × 링 4개 = 2만 삼각형을
+         3cm 굵기 링에 쓰고 있었다 — 4×10 으로 줄여도 실루엣은 그대로 끊긴다. */
+      B.at(torusG(0.298, 0.030, 4, 10), steel, 0, 0.305, 0, Math.PI / 2, 0, 0);
+      B.at(torusG(0.298, 0.030, 4, 10), steel, 0, 0.555, 0, Math.PI / 2, 0, 0);
       // 상·하판 처마(챠임)
-      B.at(torusG(0.288, 0.026, 6, 20), steel, 0, 0.845, 0, Math.PI / 2, 0, 0);
-      B.at(torusG(0.288, 0.026, 6, 20), steel, 0, 0.020, 0, Math.PI / 2, 0, 0);
-      B.at(cylG(0.272, 0.272, 0.035, 20), steel, 0, 0.866, 0);      // 상판
-      B.at(cylG(0.272, 0.272, 0.030, 20), steel, 0, 0.010, 0);
+      B.at(torusG(0.288, 0.026, 4, 10), steel, 0, 0.845, 0, Math.PI / 2, 0, 0);
+      B.at(torusG(0.288, 0.026, 4, 10), steel, 0, 0.020, 0, Math.PI / 2, 0, 0);
+      B.at(cylG(0.272, 0.272, 0.035, 14), steel, 0, 0.866, 0);      // 상판
+      B.at(cylG(0.272, 0.272, 0.030, 14), steel, 0, 0.010, 0);
       // 마개 2개 (2인치 + 3/4인치) — 상판에 돌출
-      B.at(cylG(0.062, 0.068, 0.038, 10), steel, 0.155, 0.892, 0.062);
-      B.at(cylG(0.052, 0.052, 0.020, 8), steel, 0.155, 0.914, 0.062);
-      B.at(cylG(0.040, 0.045, 0.032, 8), steel, -0.115, 0.889, -0.125);
+      B.at(cylG(0.062, 0.068, 0.038, 8), steel, 0.155, 0.892, 0.062);
+      B.at(cylG(0.052, 0.052, 0.020, 6), steel, 0.155, 0.914, 0.062);
+      B.at(cylG(0.040, 0.045, 0.032, 6), steel, -0.115, 0.889, -0.125);
       o.add(B.mesh('oilDrum'));
       o.rotation.y = r() * 6.283;
       // 20% 는 2~6° 기울여 세운다 — 통조림 캔처럼 반듯하게 줄 서 있으면 소품이 죽는다
@@ -3630,11 +3776,11 @@
       for (var bo = -1; bo <= 1; bo += 2)                             // 앵커 볼트
         B.at(cylG(0.014, 0.014, 0.05, 6), steel, bo * 0.052, 0.258, bo * 0.052);
       B.at(cylG(0.20, 0.26, 0.22, 10), MAT('concrete'), 0, 0.11, 0);
-      B.at(boxG(1.25, 0.62, 0.05), PAINT('#d9cbb0', seed), 0, 1.85, 0.04, 0, 0, 0.02);
-      B.at(boxG(1.31, 0.09, 0.06), PAINT('#2b3440', seed + 1), 0, 2.13, 0.045);
-      B.at(boxG(1.31, 0.09, 0.06), PAINT('#2b3440', seed + 1), 0, 1.57, 0.045);
-      B.at(boxG(0.9, 0.11, 0.02), PAINT('#2b3440', seed + 2), -0.1, 1.94, 0.075);
-      B.at(boxG(0.6, 0.09, 0.02), PAINT('#2b3440', seed + 2), -0.25, 1.76, 0.075);
+      B.at(boxG(1.25, 0.62, 0.05), PAINT('#d9cbb0', 0), 0, 1.85, 0.04, 0, 0, 0.02);
+      B.at(boxG(1.31, 0.09, 0.06), steel, 0, 2.13, 0.045);
+      B.at(boxG(1.31, 0.09, 0.06), steel, 0, 1.57, 0.045);
+      B.at(boxG(0.9, 0.11, 0.02), steel, -0.1, 1.94, 0.075);
+      B.at(boxG(0.6, 0.09, 0.02), steel, -0.25, 1.76, 0.075);
       o.add(B.mesh('signBoard'));
       o.rotation.y = (r() - 0.5) * 0.3;
       o.userData.kind = 'prop'; o.userData.prop = 'signBoard';
@@ -4299,6 +4445,8 @@
       /* 소품 / 지형 */
       prop: prop,
       island: island,
+      /* 배치가 끝난 정적 메시들을 하나로 굽는다 (드로우콜 = 머티리얼 수) */
+      mergeMeshes: mergeMeshes,
       /* 관리 */
       dispose: disposeAll,
       stats: stats,

@@ -92,10 +92,16 @@
        먼 캐스터는 자연히 부드러워집니다.
        fxaa 는 **전 품질에서 켭니다** — MSAA 는 지오메트리 엣지만 잡고, 후프 밴드·
        그릴·레일 두정면의 셰이딩/텍스처 에일리어싱은 못 잡습니다(합성 후 1패스). */
+    /* q0 의 bloomLevels 가 0 인 이유 — 저사양 티어에서는 프레임이 화질보다 우선이다.
+       블룸 체인은 프리필터 1 + 다운 (n−1) + 업 (n−1) = 2n−1 패스다(3레벨이면 5패스).
+       q0 에서 0 으로 두면 allocRTs 가 블룸 RT 를 아예 안 만들고(HalfFloat 3장 절약)
+       frame() 의 블룸 블록이 통째로 건너뛰어진다 — 합성 패스는 tBloom=whiteTex,
+       uBloom=0 으로 자동 처리되므로 셰이더 분기를 새로 만들 필요가 없다.
+       잃는 것: q0 에서 램프·태양 글린트의 번짐. q1·q2 는 그대로다. */
     var QUAL = [
       /* q0 — 저사양 */
       { res: 0.80, maxPx: 1.15e6, msaa: 0, ssao: false, aoSamples: 8,  prepass: 0.5,
-        bloomLevels: 3, shadow: 1024, shadowRadius: 1.2, fxaa: true,  ca: false },
+        bloomLevels: 0, shadow: 1024, shadowRadius: 1.2, fxaa: true,  ca: false },
       /* q1 — 중간 */
       { res: 0.96, maxPx: 2.60e6, msaa: 2, ssao: true,  aoSamples: 12, prepass: 0.7,
         bloomLevels: 4, shadow: 2048, shadowRadius: 1.5, fxaa: true, ca: true },
@@ -193,7 +199,7 @@
 
     /* 패스 머티리얼 */
     var fsGeo = null, quadScene = null, quadMesh = null, quadCam = null;
-    var skyMesh = null, skyMat = null;
+    var skyMesh = null, skyMat = null, skyMatLo = null;
     var prepassMat = null;
     var ssaoMat = null, blurMat = null, preMat = null, downMat = null, upMat = null, compMat = null;
 
@@ -286,7 +292,7 @@
     /* info */
     var info = { fps: 60, tris: 0, calls: 0, quality: 2 };
     var _fpsAcc = 0, _fpsN = 0;
-    var _histSum = 0, _histN = 0, _downgrades = 0, _cool = 0;
+    var _downgrades = 0;        /* autoQuality 가 내린 횟수 (최대 2) */
 
     /* 스크래치 */
     var _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
@@ -474,6 +480,66 @@
       '  gl_FragColor = vec4( c, 1.0 );',
       '}'
     ].join('\n');
+
+    /* ══ q0 전용 저비용 하늘 ═══════════════════════════════════════════════
+       이 하늘은 풀스크린 트라이앵글이라 **화면 전 픽셀**에서 돌고, 픽셀당 value-noise
+       를 40번 가까이 해시한다(fbm 4옥타브 + fbm3 3옥타브 + 띠 fbm3 3옥타브).
+       저사양 티어에서 단일 최대 비용이다.
+
+       ★ 위의 SKY_FRAG 문자열은 **한 글자도 건드리지 않는다.** 대신 그 결과물에서
+         노이즈 호출부만 바꿔치기해 q0 판을 따로 만든다. 이유는 실측이다:
+         셰이더를 `if (uDetail > 0.5) { 원본 } else { 저옥타브 }` 로 재구성했더니
+         q1·q2 의 **소스가 재배치되면서 컴파일러가 다른 코드를 뱉어** 화면의 61%
+         화소가 ±1 씩 달라졌다(기준본 대비, 하네스 자체는 0화소 재현). 산술적으로
+         동치여도 mad 융합·레지스터 배치가 달라지면 8비트로 내려올 때 값이 갈린다.
+         소스가 바이트 단위로 같아야 프로그램이 같고, 그래야 픽셀이 같다.
+
+       바꾸는 것 (전부 **평균 중립** — 하늘의 평균 색과 IBL 근사 skyAt() 이 안 흔들린다):
+         · fbm 4옥타브 → 2옥타브,  fbm3 3옥타브 → 2옥타브.
+           빠진 옥타브를 **그 기댓값(0.5 × 진폭)** 인 상수로 대체한다. 그래서 평균이
+           정확히 0.5 로 유지되고, 남긴 1·2옥타브의 가중치도 원본과 동일하다 —
+           큰 뭉게덩어리의 대비가 안 변하므로 crest(순백) 면적도 안 변한다.
+           단순히 2옥타브만 재정규화하면 1옥타브 가중치가 25% 커져 하늘이 대비가
+           세지고 순백 얼룩이 늘어난다. 그 함정을 피한 식이다.
+         · 디테일 옥타브(hgt 의 13%)와 가로 띠 변조(±6.5%) 는 생략. 둘 다 중심이
+           0.5 라 빼도 평균이 안 움직인다.
+       해시 호출이 픽셀당 40회 → 16회로 준다. */
+    var SKY_LO_HELPERS = [
+      'float sh_fbm_lo( vec2 p ){',
+      '  float v = 0.5 * sh_vn( p ) + 0.25 * sh_vn( p * 2.03 );',
+      '  return ( v + 0.09375 ) * 1.067;',
+      '}',
+      'float sh_fbm3_lo( vec2 p ){',
+      '  float v = 0.5 * sh_vn( p ) + 0.25 * sh_vn( p * 2.07 );',
+      '  return ( v + 0.0625 ) * 1.143;',
+      '}',
+      ''
+    ].join('\n');
+
+    /* 원본에서 이 문자열들을 정확히 찾아 바꾼다. 하나라도 못 찾으면 (누군가 위쪽
+       SKY_FRAG 를 고친 것이므로) 저비용 판을 포기하고 원본을 그대로 쓴다 —
+       조용히 반쪽짜리 셰이더를 만드는 것보다 낫다. */
+    var SKY_LO_SWAP = [
+      ['vec3 sh_aces( vec3 c ){', SKY_LO_HELPERS + 'vec3 sh_aces( vec3 c ){'],
+      ['    float hgt = sh_fbm( P * 5.4 + dr );',
+       '    float hgt = sh_fbm_lo( P * 5.4 + dr );'],
+      ['    float hs  = sh_fbm3( ( P + sdir * 0.070 ) * 5.4 + dr );',
+       '    float hs  = sh_fbm3_lo( ( P + sdir * 0.070 ) * 5.4 + dr );'],
+      ['    if ( uDetail > 0.5 ) hgt = hgt * 0.87 + sh_fbm3( P * 21.0 - dr * 1.7 ) * 0.13;', ''],
+      ['    vec2 bq = vec2( dot( hd / hl, vec2( -sdir.y, sdir.x ) ) * 2.9,\n' +
+       '                    log( max( dy, 0.02 ) ) * 3.2 ) + dr * 0.35;\n' +
+       '    c *= 1.0 + ( sh_fbm3( bq ) - 0.5 ) * 0.13 * smoothstep( 0.02, 0.26, dy );', '']
+    ];
+
+    function skyFragLo() {
+      var s = SKY_FRAG;
+      for (var i = 0; i < SKY_LO_SWAP.length; i++) {
+        var from = SKY_LO_SWAP[i][0];
+        if (s.indexOf(from) < 0) return null;         /* 원본이 바뀌었다 → 포기 */
+        s = s.replace(from, SKY_LO_SWAP[i][1]);
+      }
+      return s;
+    }
 
     /* ── SSAO ───────────────────────────────────────────────────── */
 
@@ -1547,6 +1613,21 @@
         depthTest: false, depthWrite: false, fog: false, side: THREE.DoubleSide,
         toneMapped: false
       });
+      skyMat.uniforms.uDetail.value = (_quality >= 1) ? 1 : 0;
+
+      /* q0 판. **유니폼 객체를 공유**하므로 setTimeOfDay 등이 한쪽만 갱신할 일이 없고,
+         티어 전환은 skyMesh.material 포인터만 바꾸면 끝이다(재컴파일 없음 — 두 프로그램
+         모두 warmupPasses() 가 부팅 때 미리 만들어 둔다). */
+      var loSrc = skyFragLo();
+      if (loSrc) {
+        skyMatLo = new THREE.ShaderMaterial({
+          uniforms: skyMat.uniforms,
+          vertexShader: SKY_VERT, fragmentShader: loSrc,
+          depthTest: false, depthWrite: false, fog: false, side: THREE.DoubleSide,
+          toneMapped: false
+        });
+      }
+
       skyMesh = new THREE.Mesh(fsGeo, skyMat);
       skyMesh.frustumCulled = false;
       skyMesh.matrixAutoUpdate = false;
@@ -1615,6 +1696,66 @@
       if (oldKeys === newKeys) return;
       compMat.defines = d;
       compMat.needsUpdate = true;
+    }
+
+    /* ── 하늘 그리는 순서 ────────────────────────────────────────────────────
+       하늘은 정점 셰이더가 이미 z=1.0(원평면)을 쓰는 풀스크린 트라이앵글이다.
+       기본 경로는 renderOrder −100000 · depthTest:false 로 **맨 먼저** 그린다 —
+       즉 섬이 덮어쓸 픽셀까지 포함해 화면 전 픽셀에서 구름 fbm 을 돌린 뒤 그 위에
+       지오메트리를 덧그린다(완전 오버드로우).
+
+       q0 에서는 이걸 뒤집어 **불투명 지오메트리 다음**에 depthTest 켜고 그린다.
+       z=1.0 이므로 깊이가 안 써진 배경 픽셀에서만 통과한다(클리어값 1.0, LessEqual).
+       → 결과 이미지는 완전히 동일하고(실측: 1,603,040 화소 중 0개 차이) 섬이 가린
+         만큼의 하늘 셰이딩이 통째로 사라진다.
+       ★ 안전 근거: 이 게임의 depthWrite:false 머티리얼은 전부 transparent:true 라
+         **투명 리스트**에 들어간다. three 는 불투명 리스트를 전부 그린 뒤 투명을
+         그리므로, renderOrder 를 아무리 키워도 하늘은 여전히 투명 오브젝트보다
+         먼저 나온다 — 블렌딩 순서가 안 바뀐다.
+       q1·q2 는 기존 경로(맨 먼저 · depthTest 없음) 그대로 둔다. */
+    function applySkyOrder() {
+      if (!skyMesh || !skyMat) return;
+      var late = (_quality === 0);
+      skyMesh.renderOrder = late ? 100000 : -100000;
+      /* depthTest 는 상태값이라 셰이더 재컴파일을 유발하지 않는다 */
+      skyMat.depthTest = late;
+      if (skyMatLo) skyMatLo.depthTest = late;
+      /* q0 은 저옥타브 판. 프로그램은 부팅 때 둘 다 컴파일해 뒀으므로 전환은 즉시다. */
+      skyMesh.material = (late && skyMatLo) ? skyMatLo : skyMat;
+    }
+
+    /* 티어별로 갈리는 프로그램을 **부팅 때 전부 컴파일**해 둔다.
+       합성 셰이더는 SH_FXAA/SH_CA/SH_AO 조합이 티어마다 달라서, 자동 강등이
+       일어나는 순간(= 이미 느린 기기가 더 느려진 순간) 큰 셰이더를 새로 컴파일하느라
+       몇 초를 멈춘다. 부팅 때 미리 세 조합을 다 만들어 캐시에 넣어 두면 전환이
+       RT 재할당만 남아 매끄러워진다. (하늘은 uniform 분기라 프로그램이 하나뿐이다.) */
+    function warmupPasses() {
+      if (!renderer) return;
+      try {
+        /* 하늘 두 판 (q0 저옥타브 / q1·q2 원본) */
+        if (skyMesh && skyMatLo && camera) {
+          var savedSky = skyMesh.material;
+          skyMesh.material = skyMatLo; renderer.compile(scene, camera);
+          skyMesh.material = skyMat; renderer.compile(scene, camera);
+          skyMesh.material = savedSky;
+        }
+        if (!post || !quadScene || !compMat) return;
+        /* 합성 셰이더의 티어별 조합 */
+        var savedMat = quadMesh.material, savedDefines = compMat.defines;
+        for (var i = 0; i < QUAL.length; i++) {
+          var d = {};
+          if (QUAL[i].fxaa) d.SH_FXAA = '';
+          if (QUAL[i].ca) d.SH_CA = '';
+          if (QUAL[i].ssao) d.SH_AO = '';
+          compMat.defines = d;
+          compMat.needsUpdate = true;
+          quadMesh.material = compMat;
+          renderer.compile(quadScene, quadCam);
+        }
+        compMat.defines = savedDefines;
+        compMat.needsUpdate = true;
+        quadMesh.material = savedMat;
+      } catch (e) { U.err(e); }
     }
 
     /* ══════════════════════════════════════════════════════════════════
@@ -1703,6 +1844,8 @@
 
         buildPasses();
         scene.add(skyMesh);
+        applySkyOrder();
+        warmupPasses();
 
         setTimeOfDay(0.35);
 
@@ -1780,6 +1923,7 @@
       }
       if (post && changedSamples) buildSSAOMat();
       if (skyMat) skyMat.uniforms.uDetail.value = (q >= 1) ? 1 : 0;
+      applySkyOrder();
       applyAOUniforms();
       updateCompositeDefines();
       _needResize = true;
@@ -1806,19 +1950,65 @@
       aoUni.shSpecAA.value = Math.max(fx.specAA, 0);
     }
 
-    function autoQuality(dt) {
+    /* ── 저사양 자동 강등 ──────────────────────────────────────────
+       예전 구현은 **정작 강등이 필요한 기기에서 구조적으로 동작할 수 없었다.**
+       실측(430x932@dpr2, CPU 4x/6x 스로틀링)에서 1.5~2.7fps 인데도 quality 2 를 유지했다.
+       원인 셋:
+         1. 90-game.js 가 `dt = Math.min(0.05, dt)` 로 클램프해서 넘긴다. 진짜 1.5fps(0.67s)
+            여도 여기엔 0.05 로 도착해 "20fps" 로 계산됐다 — 얼마나 나쁜지 알 수가 없었다.
+         2. `dt > 0.25 → return` 가드는 4fps 미만 기기를 통째로 배제한다. 클램프가 없었다면
+            가장 느린 기기가 영원히 강등되지 않았을 것이다.
+         3. 워밍업 60프레임 + 표본 30프레임 = 90프레임을 모아야 판단했다.
+            1.5fps 에서 그건 **60초**다. 그동안 플레이어는 슬라이드쇼를 본다.
+       그래서 인자 dt 를 믿지 않고 **내부에서 실제 시간을 재고, 창을 시간 기준으로** 잡는다. */
+    /* 임계값은 보수적으로. 퍼즐 게임이라 30fps 면 충분하고, 화질을 함부로 깎으면
+       사용자가 "충분하다"고 판단한 그림이 망가진다. 1080p 통합그래픽에서 45 목표로 재보니
+       4초 만에 두 단계를 내려버렸다 — 한 단계 내린 효과를 보기도 전에 또 내린 것이다. */
+    var AQ_WARMUP_MS = 1500;    // 부팅 직후 안정화 대기
+    var AQ_COOL_MS = 3000;      // 강등 직후 — 효과를 충분히 본 뒤에 다음 판단
+    var AQ_WINDOW_S = 1.5;      // 판정 창 (프레임 수가 아니라 초)
+    var AQ_TARGET = 32;         // 이 아래로 지속되면 한 단계 내린다
+    var AQ_PANIC_S = 0.25;      // 프레임이 이보다 길면(=4fps 미만) 파국으로 본다
+    var _aqLast = 0, _aqReady = 0, _aqWinT = 0, _aqWinN = 0, _aqPanic = 0;
+
+    /** 강등/품질 변경 시 측정 창을 리셋한다 (직후 프레임은 튀므로 버린다) */
+    function aqReset(now, ms) {
+      _aqWinT = 0; _aqWinN = 0; _aqPanic = 0;
+      _aqReady = (now || U.now()) + (ms == null ? AQ_WARMUP_MS : ms);
+    }
+
+    function autoQuality(/* dt 는 쓰지 않는다 — 상단 주석 참조 */) {
       if (!renderer || _downgrades >= 2 || _quality <= 0) return;
-      if (_frames < 60) return;
-      if (_cool > 0) { _cool--; return; }
-      if (dt > 0.25 || dt <= 0) return;
-      _histSum += dt; _histN++;
-      if (_histN < 30) return;
-      var fps = _histN / _histSum;
-      _histSum = 0; _histN = 0;
-      if (fps < 45) {
+      var now = U.now();
+      if (!_aqLast) { _aqLast = now; aqReset(now); return; }
+      var real = (now - _aqLast) / 1000;
+      _aqLast = now;
+      /* 탭 복귀·GC 같은 진짜 이상 프레임만 버린다. 느린 기기의 정상 프레임은 버리지 않는다. */
+      if (real <= 0 || real > 2.0) return;
+      if (now < _aqReady) return;
+
+      _aqWinT += real; _aqWinN++;
+
+      /* 파국(4fps 미만)이면 창을 채울 때까지 기다리지 않는다. 3프레임만 봐도 충분하다.
+         1.5fps 에서 1초 창을 채우려면 그것만으로도 이미 몇 초가 지나간다. */
+      if (real > AQ_PANIC_S) {
+        if (++_aqPanic >= 3) {
+          _downgrades = 2;                 // 더 내려갈 곳이 없으니 여기서 끝낸다
+          setQuality(0);
+          aqReset(now, AQ_COOL_MS);
+          return;
+        }
+      } else if (_aqPanic > 0) {
+        _aqPanic--;
+      }
+
+      if (_aqWinT < AQ_WINDOW_S) return;
+      var fps = _aqWinN / _aqWinT;
+      _aqWinT = 0; _aqWinN = 0;
+      if (fps < AQ_TARGET) {
         _downgrades++;
-        _cool = 180;
         setQuality(_quality - 1);
+        aqReset(now, AQ_COOL_MS);
       }
     }
 
@@ -2295,9 +2485,9 @@
         if (whiteTex) { whiteTex.dispose(); whiteTex = null; }
         if (noiseTex) { noiseTex.dispose(); noiseTex = null; }
         if (fsGeo) { fsGeo.dispose(); fsGeo = null; }
-        var mats = [skyMat, prepassMat, ssaoMat, blurMat, preMat, downMat, upMat, compMat];
+        var mats = [skyMat, skyMatLo, prepassMat, ssaoMat, blurMat, preMat, downMat, upMat, compMat];
         for (var i = 0; i < mats.length; i++) if (mats[i]) mats[i].dispose();
-        skyMat = prepassMat = ssaoMat = blurMat = preMat = downMat = upMat = compMat = null;
+        skyMat = skyMatLo = prepassMat = ssaoMat = blurMat = preMat = downMat = upMat = compMat = null;
         if (key && key.shadow.map) { key.shadow.map.dispose(); key.shadow.map = null; }
         renderer.dispose();
       } catch (e) { U.err(e); }

@@ -114,6 +114,10 @@ window.SH.UI = (function () {
   var consistOwned = false;   // Game 이 UI.consist 를 부른 적이 있는가
   var consistSig = '';        // DOM 재생성 여부 판단용 서명
   var labelMap = {};          // trackId -> {el, kk, nm, ct, x, y, ...}
+  var labelArr = [];          // 같은 레코드의 '배열' — 매 프레임 for..in 을 피한다
+  var lblBuf = [];            // layoutLabels 재사용 버퍼 (프레임당 할당 0)
+  var lblGen = 0;             // 이번 프레임에 들어온 라벨을 표시하는 세대 번호
+  var lblDirty = true;        // 뷰포트가 바뀌었으니 다음 틱에 반드시 다시 앉힌다
   var labelsOwned = false;    // Game 이 UI.labels 를 부른 적이 있는가
   var lblRaf = 0, tutRaf = 0, tutPt = null, bubW = 0, bubH = 0;
   var tutLbl = null;          // 지금 튜토리얼이 가리키는 선로 이름표 id
@@ -124,6 +128,10 @@ window.SH.UI = (function () {
   var tutSig = null, staleT = 0, coachStale = false;
   var TRACK_KO = { HEAD: '인상선', EXIT: '출발선', S1: '측선 1', S2: '측선 2', S3: '측선 3' };
   var _wpt = null;            // World.point 재사용 버퍼 (프레임당 할당 0)
+  /* 뷰포트 크기 캐시 — window.innerWidth/innerHeight 는 '읽는 순간 레이아웃을 강제'하는
+     속성이다. 매 프레임 도는 코드(이름표·말풍선)에서는 절대 직접 읽지 않는다. */
+  var vpW = 0, vpH = 0, vpT = -1e9;
+  var cutPt = null;           // 'consist-cut' 앵커 화면 좌표 캐시 {a,x,y,t}
 
   /* ── 작은 유틸 ───────────────────────────────────────────────── */
   function reduced() {
@@ -168,6 +176,16 @@ window.SH.UI = (function () {
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
   function pad2(n) { n = Math.max(0, Math.floor(n)); return (n < 10 ? '0' : '') + n; }
+  /** 뷰포트 크기를 다시 읽는다. 값이 달라졌으면 true.
+      resize/orientationchange/ResizeObserver 에서 부르고, 이벤트를 놓쳐도 굳지 않도록
+      이름표 틱이 0.5초에 한 번만 추가로 확인한다(초당 60회가 아니다). */
+  function vp() {
+    vpT = U.now();
+    var w = window.innerWidth || 0, h = window.innerHeight || 0;
+    if (w === vpW && h === vpH) return false;
+    vpW = w; vpH = h; cutPt = null;
+    return true;
+  }
 
   /* 레이어 표시/숨김 — 트랜지션이 끝난 뒤 display:none 으로 접근성 트리에서 제거.
 
@@ -1684,6 +1702,8 @@ window.SH.UI = (function () {
              w: (root ? root.clientWidth : window.innerWidth) - pad - (wide ? 132 : pad) };
   }
   function measure() {
+    if (vp()) lblDirty = true;                  // 화면이 바뀌었으면 이름표를 다시 앉힌다
+    cutPt = null;                               // 편성 바가 움직였을 수 있다
     if (!built || !els.strip) return;
     try {
       var n = targetIds.length || 1;
@@ -2332,6 +2352,7 @@ window.SH.UI = (function () {
   }
   function renderConsist(list) {
     if (!built) return;
+    cutPt = null;                     // ✂ 가 다시 놓인다 — 앵커 캐시를 버린다
     var arr = [], i;
     list = list || [];
     for (i = 0; i < list.length; i++) arr.push(resolveWagon(list[i]));
@@ -2410,42 +2431,53 @@ window.SH.UI = (function () {
     on(b, 'pointerdown', function (e) { e.stopPropagation(); });
     on(b, 'click', function (e) { e.stopPropagation(); sfx('ui'); goHook(id); });
     els.labels.appendChild(b);
-    return { el: b, kk: b.querySelector('.kk'), nm: b.querySelector('.nm'),
-             ct: b.querySelector('.ct'), x: -9999, y: -9999, px: -9999, py: -9999,
-             w: 78, h: 27, dirty: true, ly: 0,
-             t: '', c: '', k: '', s: '', w2: '', vis: false };
+    var r = { id: String(id), el: b, kk: b.querySelector('.kk'), nm: b.querySelector('.nm'),
+              ct: b.querySelector('.ct'), x: -9999, y: -9999, px: -9999, py: -9999,
+              w: 78, h: 27, dirty: true, ly: 0, gen: 0,
+              t: '', c: '', k: '', s: '', rs: '', vis: false, tut: false };
+    labelArr.push(r);
+    return r;
   }
+  /** 넘어온 값 중 **달라진 것만** DOM 에 쓴다. 위치·크기·표시가 바뀌었으면 true 를
+      돌려주고, 그때만 다시 앉힌다. 매 프레임 도는 함수라 규칙이 둘 있다 —
+      ① DOM 을 '읽지' 않는다 (offsetWidth·getBoundingClientRect 금지)
+      ② 값이 그대로면 문자열도 만들지 않는다 (대입 자체와 GC 가 곧 비용이다). */
   function applyLabel(r, d) {
+    var need = false;
     /* 좌표는 여기서 '희망 위치'로만 기록한다 — 실제 transform 은 겹침을 푼 뒤 한 번에. */
-    r.x = Math.round(d.x || 0);
-    r.y = Math.round(d.y || 0);
-    var vis = d.visible !== false;
-    var nm = d.name || TRACK_KO[d.id] || String(d.id);
-    if (nm !== r.t) { r.t = nm; r.nm.textContent = nm; r.dirty = true; }
+    var nx = Math.round(d.x || 0), ny = Math.round(d.y || 0);
+    if (nx !== r.x || ny !== r.y) { r.x = nx; r.y = ny; need = true; }
+    var nm = d.name || TRACK_KO[r.id] || r.id;
+    var txt = false;
+    if (nm !== r.t) { r.t = nm; r.nm.textContent = nm; txt = true; }
     var kk = (d.key == null || d.key === '') ? '' : String(d.key);
     if (kk !== r.k) {
       r.k = kk; r.kk.textContent = kk;
       r.kk.style.display = kk ? '' : 'none';
-      r.dirty = true;
+      txt = true;
     }
     var ct = '';
     if (d.count != null) ct = (d.count | 0) + (d.cap ? ('/' + (d.cap | 0)) : '');
     if (ct !== r.c) {
       r.c = ct; r.ct.textContent = ct;
       r.ct.style.display = ct ? '' : 'none';
-      r.dirty = true;
+      txt = true;
     }
+    if (txt) { r.dirty = true; need = true; }      // 글자가 바뀌었으니 폭을 다시 재야 한다
     var st = d.state || 'active';
-    if (st !== r.s) {
+    var stCh = (st !== r.s);
+    if (stCh) {
       r.s = st;
       r.el.classList.toggle('is-here', st === 'here');
       r.el.classList.toggle('is-blocked', st === 'blocked');
       r.el.classList.toggle('is-active', st !== 'here' && st !== 'blocked');
     }
-    var why = st === 'blocked' ? translate(d.reason) : '';
-    var sig = st + '' + why + '' + ct + '' + nm;
-    if (sig !== r.w2) {
-      r.w2 = sig;
+    /* 설명문(title/aria)은 번역 + 문자열 조립이 든다 — 진짜 달라졌을 때만 만든다.
+       예전에는 매 프레임 sig 문자열을 새로 조립해 비교했다(라벨 5개 x 60fps). */
+    var rs = d.reason == null ? '' : String(d.reason);
+    if (stCh || txt || rs !== r.rs) {
+      r.rs = rs;
+      var why = st === 'blocked' ? translate(rs) : '';
       r.el.title = why || (st === 'here' ? '기관차가 여기 있습니다' : (nm + '(으)로 보내기'));
       r.el.setAttribute('aria-label', nm +
         (st === 'here' ? ' — 기관차가 여기 있습니다' : (why ? ' — ' + why : ' — 여기로 보내기')) +
@@ -2453,26 +2485,37 @@ window.SH.UI = (function () {
     }
     /* 튜토리얼 대상 표시는 여기서 매번 확인한다 — 이름표 DOM 은 첫 프레임에야
        생기므로 doTutorial() 시점에는 아직 없을 수 있다. */
-    var wantTut = (tutLbl != null && tutLbl === String(d.id));
+    var wantTut = (tutLbl != null && tutLbl === r.id);
     if (wantTut !== !!r.tut) { r.tut = wantTut; r.el.classList.toggle('is-tut', wantTut); }
-    if (vis !== r.vis) { r.vis = vis; r.el.classList.toggle('is-off', !vis); }
+    var vis = d.visible !== false;
+    if (vis !== r.vis) { r.vis = vis; r.el.classList.toggle('is-off', !vis); need = true; }
+    return need;
   }
   function updateLabels(list) {
     if (!built) return;
-    var live = {}, i, d, id;
+    var i, d, r, need = lblDirty;
     list = list || [];
+    lblGen++;
     for (i = 0; i < list.length; i++) {
       d = list[i];
       if (!d || d.id == null) continue;
-      id = String(d.id);
-      live[id] = 1;
-      applyLabel(labelMap[id] || (labelMap[id] = mkLabel(id)), d);
+      r = labelMap[d.id] || (labelMap[d.id] = mkLabel(String(d.id)));
+      r.gen = lblGen;
+      if (applyLabel(r, d)) need = true;
     }
-    for (id in labelMap) {
-      if (live[id] || !labelMap[id].vis) continue;
-      labelMap[id].vis = false;
-      labelMap[id].el.classList.add('is-off');
+    /* 이번 프레임에 안 들어온 이름표는 감춘다. live 맵을 새로 만들지 않고 세대 번호로 — */
+    for (i = 0; i < labelArr.length; i++) {
+      r = labelArr[i];
+      if (r.gen === lblGen || !r.vis) continue;
+      r.vis = false; r.el.classList.add('is-off'); need = true;
     }
+    /* 뷰포트는 이름표를 화면 안에 가두는 기준이다. resize 이벤트를 놓쳐도 굳지 않도록
+       0.5초에 한 번만 다시 읽는다 (매 프레임 읽으면 레이아웃을 강제한다). */
+    if (U.now() - vpT > 500 && vp()) need = true;
+    /* ★ 카메라도 상태도 그대로면 DOM 을 아예 건드리지 않는다.
+       카메라가 움직이면 Game 이 넘기는 x/y 가 바뀌므로 여기서 반드시 걸린다. */
+    if (!need) return;
+    lblDirty = false;
     layoutLabels();
   }
 
@@ -2480,12 +2523,16 @@ window.SH.UI = (function () {
       멀리서 보면 5개 선로의 서쪽 끝이 화면상 30px 안에 뭉친다 —
       그대로 두면 이름표끼리 서로를 지운다. 아래로만 밀어 순서를 지킨다.
       폭/높이는 글자가 바뀔 때만 잰다(매 프레임 offsetWidth 는 레이아웃을 강제한다). */
+  function byLy(p, q) { return p.ly - q.ly; }
   function layoutLabels() {
-    var arr = [], id, r, i, j, a, b, need;
-    for (id in labelMap) {
-      r = labelMap[id];
+    var arr = lblBuf, r, i, j, a, b, need;
+    arr.length = 0;                          // 버퍼 재사용 — 프레임당 배열 할당 0
+    for (i = 0; i < labelArr.length; i++) {
+      r = labelArr[i];
       if (!r.vis) continue;
       if (r.dirty) {
+        /* 여기가 이 파일에서 유일하게 레이아웃을 강제하는 지점이다.
+           글자(이름/숫자키/량수)가 바뀐 프레임에만 들어온다 — 매 프레임이 아니다. */
         r.w = r.el.offsetWidth || 78;
         r.h = r.el.offsetHeight || 27;
         r.dirty = false;
@@ -2494,8 +2541,9 @@ window.SH.UI = (function () {
       arr.push(r);
     }
     if (!arr.length) return;
-    var W = window.innerWidth, H = window.innerHeight;
-    arr.sort(function (p, q) { return p.ly - q.ly; });
+    if (!vpW || !vpH) vp();
+    var W = vpW, H = vpH;
+    arr.sort(byLy);                          // 비교 함수도 매번 새로 만들지 않는다
     for (i = 0; i < arr.length; i++) {
       a = arr[i];
       a.lx = U.clamp(a.x, a.w / 2 + 6, Math.max(a.w / 2 + 6, W - a.w / 2 - 6));
@@ -2640,20 +2688,25 @@ window.SH.UI = (function () {
     return typeof a === 'string' && (a.indexOf('track:') === 0 || a.indexOf('consist') === 0);
   }
   function anchorPos(a) {
-    var W = window.innerWidth, H = window.innerHeight, r, p;
+    if (!vpW || !vpH) vp();
+    var W = vpW, H = vpH, r, p;
     if (a && typeof a === 'object' && a.x != null) return { x: a.x, y: a.y };
     if (typeof a === 'string') {
       /* 'track:S1' — 선로 이름표 위. 라벨이 아직 없으면 월드 좌표로 직접 잡는다. */
       if (a.indexOf('track:') === 0) {
-        var id = a.slice(6), rec = labelMap[id], lr;
+        var id = a.slice(6), rec = labelMap[id];
         /* 이름표 '바로 아래' 를 가리키면 안 된다 — layoutLabels() 가 겹친 이름표를
            6px 간격으로 아래에 쌓기 때문에 그 자리는 **다른 선로의** 이름표다.
            (실측: "출발선을 탭하세요" 의 손가락이 측선 2 위에 놓였다.)
            숫자 배지(왼쪽 아래)를 짚는다 — 이름표는 가운데 정렬로 쌓이므로
            왼쪽 아래가 아래 이름표와 가장 덜 겹친다. 어느 줄인지는 is-tut 가 확정한다. */
-        if (rec && rec.vis) {
-          lr = rec.el.getBoundingClientRect();
-          if (lr.width || lr.height) return { x: lr.left + 10, y: lr.bottom - 2 };
+        /* ★ 이 함수는 followTut 이 매 프레임 부른다. 그래서 이름표의 사각형을
+           getBoundingClientRect 로 '읽지' 않는다 — 같은 프레임에 이름표 transform 을
+           쓴 직후의 읽기라 강제 리플로우가 나는 자리다. layoutLabels 가 확정한
+           px/py/w/h 가 곧 그 사각형이다: transform 이 translate3d(px,py) 뒤
+           translate(-50%,-100%) 이므로 left = px - w/2, bottom = py. */
+        if (rec && rec.vis && rec.px > -9000) {
+          return { x: rec.px - rec.w / 2 + 10, y: rec.py - 2 };
         }
         try {
           if (window.THREE && SH.World && SH.World.current && SH.Render && SH.Render.screenPos) {
@@ -2666,13 +2719,20 @@ window.SH.UI = (function () {
         } catch (e) { /* 월드 미준비 */ }
         return { x: W * .5, y: H * .46 };
       }
-      /* 'consist-cut' / 'consist-cut:2' — 편성 바의 ✂ */
+      /* 'consist-cut' / 'consist-cut:2' — 편성 바의 ✂.
+         편성 바는 DOM 으로 놓이므로 카메라와 무관하다. 그래도 등장 트랜지션 동안에는
+         움직이니, 매 프레임 재는 대신 0.2초에 한 번만 잰다(캐시는 편성이 다시 그려지거나
+         화면 크기가 바뀌면 버린다). querySelector + getBoundingClientRect 가 60Hz → 5Hz. */
       if (a.indexOf('consist') === 0) {
+        if (cutPt && cutPt.a === a && U.now() - cutPt.t < 200) return { x: cutPt.x, y: cutPt.y };
         var k = a.indexOf(':') > 0 ? a.slice(a.indexOf(':') + 1) : '';
         var btn = k !== ''
           ? els.consistRow.querySelector('.sh-cut[data-k="' + k + '"]')
           : els.consistRow.querySelector('.sh-cut');
-        if ((p = midOf(btn || els.consist, btn ? .5 : .2))) return p;
+        if ((p = midOf(btn || els.consist, btn ? .5 : .2))) {
+          cutPt = { a: a, x: p.x, y: p.y, t: U.now() };
+          return p;
+        }
         return { x: W * .5, y: H * .72 };
       }
     }
@@ -2696,19 +2756,20 @@ window.SH.UI = (function () {
       말풍선이 그 위에 앉으면 "어디를 누르라는 건지" 를 가려 버린다
       — 430px 세로 화면에서 실제로 인상선·측선 1 이 통째로 가려졌다. */
   function labelBand() {
-    var top = Infinity, bot = -Infinity, id, r, bb;
-    for (id in labelMap) {
-      r = labelMap[id];
-      if (!r || !r.vis) continue;
-      bb = r.el.getBoundingClientRect();
-      if (!bb.width && !bb.height) continue;
-      if (bb.top < top) top = bb.top;
-      if (bb.bottom > bot) bot = bb.bottom;
+    /* anchorPos 와 같은 이유로 DOM 을 읽지 않는다 — px/py/h 로 그대로 계산된다. */
+    var top = Infinity, bot = -Infinity, i, r, t;
+    for (i = 0; i < labelArr.length; i++) {
+      r = labelArr[i];
+      if (!r || !r.vis || r.px < -9000) continue;
+      t = r.py - r.h;
+      if (t < top) top = t;
+      if (r.py > bot) bot = r.py;
     }
     return (bot > top) ? { top: top, bottom: bot } : null;
   }
   function placeCoach(pt, arrow, avoidLabels) {
-    var W = window.innerWidth, H = window.innerHeight;
+    if (!vpW || !vpH) vp();
+    var W = vpW, H = vpH;
     var b = els.cbub, bw = bubW, bh = bubH;
     if (!bw || !bh) {
       b.style.left = '-9999px'; b.style.top = '0px';
@@ -3065,9 +3126,10 @@ window.SH.UI = (function () {
         if (root && root.parentNode) root.parentNode.removeChild(root);
       } catch (e) { U.err(e); }
       root = null; built = false; els = {}; couplers = {}; chipEls = []; api.el = null;
-      labelMap = {}; labelsOwned = false; consistOwned = false; consistHooks = null;
+      labelMap = {}; labelArr = []; lblBuf = []; lblGen = 0; lblDirty = true;
+      labelsOwned = false; consistOwned = false; consistHooks = null;
       consistList = []; consistSig = ''; tutStep = null; tutPt = null; tutLbl = null;
-      tutSig = null; coachStale = false; stripX = 0;
+      tutSig = null; coachStale = false; stripX = 0; cutPt = null; vpW = 0; vpH = 0;
     }
   };
 

@@ -467,6 +467,70 @@
     });
   }
 
+  /* ── 정적 파트 병합 ─────────────────────────────────────────
+     선로 한 벌은 레일 2 · 도상 1 · 분기기 10여 · 차막이 3 개의 **개별 메시**로
+     오는데, 멀티 머티리얼까지 세면 선로 하나가 드로우콜 40개다. 다섯 벌이면
+     200개 — 여기에 섀도 패스가 다시 곱해진다. 배치가 끝난 뒤 움직이지 않는
+     것들만 골라 한 메시로 구우면 드로우콜이 "머티리얼 수"까지 내려간다.
+     움직이는 부품(분기기 텅레일·타이바·레버)은 userData.noMerge 로 빼 둔다.
+     ───────────────────────────────────────────────────────── */
+  function noMerge(o) { if (o) { if (!o.userData) o.userData = {}; o.userData.noMerge = true; } }
+
+  /* ── 그림자 캐스터 정리 ──────────────────────────────────────
+     섀도 패스는 드로우콜과 삼각형을 통째로 한 번 더 그린다(실측: 전체의 40 %).
+     실루엣을 만드는 것 — 섬 상판 · 나무 · 건물 · 급수탑 · 차량 몸체 — 만 남기고,
+     바닥에 깔려 자기 그림자가 어차피 안 보이는 잔부품은 뺀다.
+     · 침목 · 자갈 · 베어러: 도상 위에 5cm 솟은 판자다. 레일 그림자는 그대로 남는다.
+     · 바퀴 · 완충기 · 연결기: 차체 그림자 안에 들어가 있다.
+     · 석탄 더미: 무개차 안이라 바깥에서 보이지 않는다.
+     ────────────────────────────────────────────────────────── */
+  var NO_CAST = ['sleepers', 'gravel', 'bearers', 'lumps', 'wheels',
+                 'couplerBody', 'bufferHeads', 'slidePlates', 'tiebar', 'stopPlate',
+                 'ballast', 'frog', 'reflectors', 'leverBox', 'blade'];
+  function trimShadowCasters(obj) {
+    var n = 0;
+    obj.traverse(function (o) {
+      if (!o.castShadow || (!o.isMesh && !o.isInstancedMesh)) return;
+      var nm = o.name || '';
+      for (var i = 0; i < NO_CAST.length; i++) {
+        if (nm.indexOf(NO_CAST[i]) === 0) { o.castShadow = false; n++; return; }
+      }
+    });
+    return n;
+  }
+
+  function collectStatic(o, out) {
+    if (!o || !o.visible || (o.userData && o.userData.noMerge)) return;
+    if (o.isInstancedMesh || o.isPoints || o.isSprite || o.isLine) return;
+    // 자식을 매단 메시는 지우면 자식이 붕 뜬다 — 건드리지 않는다
+    if (o.isMesh) { if (!o.children.length && o.geometry) out.push(o); return; }
+    for (var i = 0; i < o.children.length; i++) collectStatic(o.children[i], out);
+  }
+
+  /**
+   * roots[] 아래 정적 메시를 그림자 캐스터 / 비캐스터 두 덩어리로 굽고 원본을
+   * 걷어낸다. 결과는 parent 에 붙는다 — **parent 는 변환이 없어야 한다**
+   * (월드 행렬째로 구웠으므로. 선로마다 준 0.6mm y 오프셋도 정점에 박힌다).
+   * 반환 = 줄어든 메시 수.
+   */
+  function mergeStaticInto(roots, parent, name) {
+    if (!parent || !SH.Geo || typeof SH.Geo.mergeMeshes !== 'function') return 0;
+    var all = [], cast = [], keep = [], i, o;
+    for (i = 0; i < roots.length; i++) collectStatic(roots[i], all);
+    if (all.length < 2) return 0;
+    for (i = 0; i < all.length; i++) (all[i].castShadow ? cast : keep).push(all[i]);
+    var made = [];
+    try {
+      if (cast.length) made.push(SH.Geo.mergeMeshes(cast, name, true, true));
+      if (keep.length) made.push(SH.Geo.mergeMeshes(keep, name + '_ns', false, true));
+    } catch (e) { U.err(e); return 0; }
+    var ok = 0;
+    for (i = 0; i < made.length; i++) if (made[i]) { parent.add(made[i]); ok++; }
+    if (!ok) return 0;
+    for (i = 0; i < all.length; i++) { o = all[i]; if (o.parent) o.parent.remove(o); }
+    return all.length - ok;
+  }
+
   /* ────────────────────────────────────────────────────────────
      접지 그림자 데칼 (contact shadow)
      ------------------------------------------------------------
@@ -859,17 +923,21 @@
     [ 0.005,  0.02, -0.02]
   ];
   var _matPool = null;
+  /** FOL[vi] 만큼 흔든 잎 색 (tintMat 과 인스턴스 컬러가 같은 계산을 쓰게 한다) */
+  function folColor(base, vi, out) {
+    var v = FOL[((vi % FOL.length) + FOL.length) % FOL.length], h = { h: 0, s: 0, l: 0 };
+    base.color.getHSL(h);
+    return (out || new THREE.Color()).setHSL(
+      (h.h + v[0] + 1) % 1,
+      U.clamp(h.s * (1 + v[1]), 0, 1),
+      U.clamp(h.l * (1 + v[2]), 0.03, 0.94));
+  }
   function tintMat(base, vi) {
     if (!base || !base.color) return base;
     if (!_matPool) _matPool = Object.create(null);
     var id = base.uuid + '|' + vi, m = _matPool[id];
     if (m) return m;
-    var v = FOL[vi % FOL.length], h = { h: 0, s: 0, l: 0 };
-    base.color.getHSL(h);
-    var c = new THREE.Color().setHSL(
-      (h.h + v[0] + 1) % 1,
-      U.clamp(h.s * (1 + v[1]), 0, 1),
-      U.clamp(h.l * (1 + v[2]), 0.03, 0.94));
+    var c = folColor(base, vi);
     var M = SH.Mat;
     // vertexColors: 밑동 AO(bakeBaseAO)가 실제로 셰이더에 도달하게 하는 스위치.
     // 이 재질은 varyFoliage 안에서만 붙고, 거기서 지오메트리 color 를 먼저
@@ -879,6 +947,28 @@
       : base;
     _matPool[id] = m;
     return m;
+  }
+  /** 인스턴싱용 잎 재질 — 색은 베이스 그대로, 정점컬러만 켠다.
+      그루마다 다른 색은 instanceColor 로 낸다(instanceColor 는 재질색에 **곱해진다**).
+      최종색 = 재질색 × 정점색(밑동 AO) × instanceColor 이므로
+      instanceColor 에 (원하는 색 ÷ 재질색) 을 넣으면 tintMat 과 같은 값이 나온다. */
+  function folInstMat(base) {
+    if (!base || !base.color) return base;
+    if (!_matPool) _matPool = Object.create(null);
+    var id = base.uuid + '|inst', m = _matPool[id];
+    if (m) return m;
+    var M = SH.Mat;
+    m = (M && M.clone) ? M.clone(base, { roughness: 0.88, vertexColors: true }) : base;
+    _matPool[id] = m;
+    return m;
+  }
+  /** tintMat(base, vi) 와 같은 색이 나오도록 하는 instanceColor 비율 */
+  function folRatio(base, vi, out) {
+    var c = folColor(base, vi, out || new THREE.Color()), b = base.color;
+    c.setRGB(U.clamp(c.r / Math.max(1e-3, b.r), 0.05, 6),
+             U.clamp(c.g / Math.max(1e-3, b.g), 0.05, 6),
+             U.clamp(c.b / Math.max(1e-3, b.b), 0.05, 6));
+    return c;
   }
 
   /* ── 밑동 AO 굽기 ──────────────────────────────────────────
@@ -1131,6 +1221,176 @@
     g.userData.uvMeters = true;
   }
 
+  /* ── 소품 인스턴싱 ──────────────────────────────────────────
+     같은 (종류 · 변종) 소품은 지오메트리도 재질도 완전히 같다 — Geo 가 이름:시드로
+     템플릿을 캐시하기 때문이다. 그런데 배치할 때마다 clone() 해서 개별 Mesh 로
+     씬에 넣으면 풀·잡초만 900개 = 드로우콜 900, 섀도 패스까지 1,800 이 된다
+     (실측: 중급 안드로이드 CPU 4x 스로틀에서 드로우콜 2,670 / 7 fps — 병목은
+      픽셀이 아니라 CPU 였다. 해상도를 1/4 로 줄여도 전혀 빨라지지 않았다).
+     그래서 put() 은 자리를 **적어 두기만** 하고, 마지막에 변종마다 InstancedMesh
+     하나로 굽는다. 행렬은 템플릿에 실제로 얹어 보고 matrixWorld 를 그대로 읽으므로
+     그림은 지금과 한 픽셀도 달라지지 않는다.
+     ─────────────────────────────────────────────────────────── */
+  /* 인스턴싱은 **개수가 많을 때**만 이득이다(풀뭉치 227 · 잡초 206 · 덤불 46).
+     울타리 36 · 기름통 22 · 나무상자 11 처럼 몇십 개짜리는 변종마다 InstancedMesh
+     하나씩 만드는 것보다 정적 병합에 얹는 게 드로우콜이 적다 — 병합 쪽은 이미
+     같은 재질(나무·강판·도장)을 쓰고 있어 그룹이 거의 늘지 않는다. */
+  var INST_PROP = { grassTuft: 1, weeds: 1, bush: 1, puddle: 1 };
+  /* 섀도 캐스터는 실루엣에 기여하는 것만 남긴다 — 섀도 패스는 드로우콜을 그대로
+     두 배로 만든다. 풀뭉치·잡초·웅덩이는 접지 데칼(contact shadow)이 이미 밑동을
+     눌러 주므로 빼도 지면에서 뜨지 않는다. */
+  /* 남기는 것: 덤불(잔디 위 실루엣) · 울타리(긴 그림자 선이 야드를 나눈다).
+     빼는 것: 나무상자 · 기름통 · 침목더미 — 전부 접지 데칼(CS_FOOT)이 밑동을
+     눌러 주고 있어서 캐스트 섀도를 빼도 지면에서 뜨지 않는다. */
+  var INST_CAST = { bush: 1, fence: 1 };
+  /* 변종 수 — 종류마다 이만큼의 지오메트리만 만들고, 개체 차이는 인스턴스 행렬
+     (위치·회전·크기)과 잎 색으로 낸다. 늘리면 그만큼 드로우콜이 는다. */
+  var PROP_VARIANTS = { tree: 8, bush: 4, weeds: 3, grassTuft: 3, crate: 3,
+                        oilDrum: 2, sleeperStack: 3, puddle: 3, fence: 3 };
+  function vseedFor(name, rnd) {
+    var n = PROP_VARIANTS[name] || 4;
+    return (U.hash(name) ^ Math.imul(((rnd() * n) | 0) + 1, 0x9e3779b1)) | 0;
+  }
+  var _ipend = null;
+
+  /** 인스턴스 한 자리 예약. rx/rz 가 null 이면 템플릿 값을 그대로 쓴다. */
+  function instAdd(name, seed, x, y, z, ry, sx, sy, sz, rx, rz, vi) {
+    if (!_ipend) _ipend = Object.create(null);
+    var key = name + ':' + seed;
+    var rec = _ipend[key] || (_ipend[key] = { name: name, seed: seed, n: 0, a: [] });
+    rec.a.push(x, y, z, ry, sx, sy, sz, rx, rz, vi); rec.n++;
+  }
+  var IST = 10;                          // 인스턴스 한 자리가 차지하는 칸 수
+
+  /* ── 정적 소품 병합 ─────────────────────────────────────────
+     인스턴싱이 이득이 아닌 소품(신호기 5 · 가로등 8 · 창고 3 · 나무 10 …)은
+     개수가 적고 변종이 많아 InstancedMesh 로 묶으면 오히려 손해다. 대신
+     **전부 한 덩어리로 병합**한다 — 드로우콜이 쓰이는 머티리얼 수까지 내려간다.
+     ───────────────────────────────────────────────────────── */
+  var _spend = null, _bxGeo = null, _bxMat = null;
+
+  /** varyFoliage 의 병합판 — 잎 재질은 공용 하나로 바꾸고, 그루별 색 편차는
+      병합할 때 정점색에 곱해 넣는다(잎 색 수만큼 드로우콜이 갈라지지 않게). */
+  function folPrepMerge(obj, vi) {
+    if (!obj || vi < 0) return;
+    obj.traverse(function (o) {
+      if (!o.isMesh || !o.material || Array.isArray(o.material)) return;
+      var mm = o.material;
+      if (!mm.userData || mm.userData.shName !== 'leaf') return;
+      bakeBaseAO(o.geometry, 0.30, 0.46);          // ← 반드시 재질 교체보다 먼저
+      var nm = folInstMat(mm);
+      if (nm === mm) return;
+      o.material = nm;
+      o.userData.mergeTint = folRatio(mm, vi, new THREE.Color());
+    });
+  }
+
+  function bxGeo() { return _bxGeo || (_bxGeo = new THREE.BoxGeometry(1, 1, 1)); }
+  function bxMat() {
+    return _bxMat || (_bxMat = new THREE.MeshBasicMaterial({ visible: false }));
+  }
+
+  /**
+   * 모아 둔 정적 소품을 굽는다.
+   * 프레이밍(Game.heroPoints)은 props 그룹의 **자식마다** 바운딩박스를 재서
+   * 키 큰 소품(5.5~16m)을 실루엣 꼭짓점으로 쓴다. 한 덩어리로 합치면 나무 열
+   * 그루가 상자 하나가 되어 카메라 프레이밍이 바뀐다 — 그래서 소품 자리마다
+   * **눈에 안 보이는 상자 프록시**를 남긴다(visible=false → 드로우콜 0,
+   * Box3.setFromObject 는 예전과 똑같은 상자를 읽는다).
+   */
+  function bakeStaticProps(propsParent, target) {
+    if (!_spend || !_spend.length) return 0;
+    var list = _spend, i, o, made = 0;
+    _spend = null;
+    var box = new THREE.Box3(), sz = new V3(), ctr = new V3();
+    for (i = 0; i < list.length; i++) {
+      o = list[i];
+      box.setFromObject(o);
+      if (box.isEmpty()) continue;
+      // 프레이밍이 실제로 쓰는 높이대(5.5~16m)만 프록시를 남긴다 — 나머지는
+      // 상자를 만들어 봐야 Game 쪽 필터에서 어차피 걸러진다.
+      if (box.max.y < 4.5 || box.max.y > 17) continue;
+      box.getSize(sz); box.getCenter(ctr);
+      var px = new THREE.Mesh(bxGeo(), bxMat());
+      px.name = 'propBounds';
+      px.visible = false;
+      px.position.copy(ctr);
+      px.scale.set(Math.max(sz.x, 1e-3), Math.max(sz.y, 1e-3), Math.max(sz.z, 1e-3));
+      px.raycast = function () { };
+      propsParent.add(px);
+    }
+    made = mergeStaticInto(list, target, 'propsStatic');
+    // 병합이 실패했으면 원본이 그대로 살아 있다 — 그때 지우면 소품이 통째로 사라진다.
+    if (made > 0) {
+      for (i = 0; i < list.length; i++) if (list[i].parent) list[i].parent.remove(list[i]);
+    }
+    return made;
+  }
+
+  /** 적어 둔 자리를 변종마다 InstancedMesh 로 굽는다. 반환 = 만든 메시 수 */
+  function bakeInstProps(parent) {
+    if (!_ipend) return 0;
+    var keys = Object.keys(_ipend), made = 0, ki, i, j;
+    var col = new THREE.Color();
+    for (ki = 0; ki < keys.length; ki++) {
+      var rec = _ipend[keys[ki]];
+      var tpl = G('prop', rec.name, rec.seed);
+      if (!tpl) continue;
+      if (rec.name === 'grassTuft' || rec.name === 'weeds') softenFoliageNormals(tpl, 0.78);
+      /* 잎 재질을 쓰는 메시는 밑동 AO 를 먼저 굽고(정점색) 인스턴싱용 재질로 바꾼다.
+         varyFoliage() 가 개별 소품에 하던 일을 그대로 인스턴스 축으로 옮긴 것. */
+      var meshes = [], leafOf = [];
+      tpl.traverse(function (o) {
+        if (!o.isMesh) return;
+        var arr = Array.isArray(o.material), ms = arr ? o.material : [o.material];
+        var out = arr ? ms.slice() : null, lf = null, k, mm, nm;
+        for (k = 0; k < ms.length; k++) {
+          mm = ms[k];
+          if (!mm || !mm.userData || mm.userData.shName !== 'leaf') continue;
+          bakeBaseAO(o.geometry, 0.30, 0.46);          // ← 반드시 재질 교체보다 먼저
+          nm = folInstMat(mm);
+          if (nm === mm) continue;
+          lf = mm;
+          if (arr) out[k] = nm; else o.material = nm;
+        }
+        if (lf && arr) o.material = out;
+        meshes.push(o); leafOf.push(lf);
+      });
+      if (!meshes.length) continue;
+      var ims = [], cast = !!INST_CAST[rec.name];
+      for (j = 0; j < meshes.length; j++) {
+        var im = new THREE.InstancedMesh(meshes[j].geometry, meshes[j].material, rec.n);
+        im.name = 'i:' + rec.name + (meshes[j].name && meshes[j].name !== rec.name
+                                     ? ':' + meshes[j].name : '');
+        im.castShadow = cast; im.receiveShadow = true;
+        im.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        im.userData.kind = 'prop'; im.userData.prop = rec.name;
+        ims.push(im);
+      }
+      // put() 이 하던 변환을 템플릿에 그대로 얹어 보고 결과 행렬만 가져온다
+      var rx0 = tpl.rotation.x, rz0 = tpl.rotation.z, a = rec.a, q;
+      for (i = 0; i < rec.n; i++) {
+        q = i * IST;
+        tpl.position.set(a[q], a[q + 1], a[q + 2]);
+        tpl.scale.set(a[q + 4], a[q + 5], a[q + 6]);
+        tpl.rotation.set(a[q + 7] == null ? rx0 : a[q + 7], a[q + 3],
+                         a[q + 8] == null ? rz0 : a[q + 8]);
+        tpl.updateMatrixWorld(true);
+        for (j = 0; j < meshes.length; j++) {
+          ims[j].setMatrixAt(i, meshes[j].matrixWorld);
+          if (leafOf[j] && a[q + 9] >= 0) ims[j].setColorAt(i, folRatio(leafOf[j], a[q + 9], col));
+        }
+      }
+      for (j = 0; j < meshes.length; j++) {
+        ims[j].instanceMatrix.needsUpdate = true;
+        if (ims[j].instanceColor) ims[j].instanceColor.needsUpdate = true;
+        parent.add(ims[j]); made++;
+      }
+    }
+    _ipend = null;
+    return made;
+  }
+
   /* ── 소품 배치 ──────────────────────────────────────────────
      원칙 (SPEC §3.7 / §6): 격자 금지, **군집과 여백**, 사람이 쓰는 곳의 흔적.
      · 시드는 소품마다 적은 수의 변형 풀에서 뽑는다 → Geo 의 템플릿 캐시가 적중해
@@ -1140,13 +1400,8 @@
      ─────────────────────────────────────────────────────────── */
   function placeProps(parent, rng) {
     var placed = 0;
-    var VARIANTS = { tree: 8, bush: 7, weeds: 6, grassTuft: 6, crate: 5,
-                     oilDrum: 4, sleeperStack: 4, puddle: 4, fence: 3 };
 
-    function vseed(name) {
-      var n = VARIANTS[name] || 4;
-      return (U.hash(name) ^ Math.imul(((rng() * n) | 0) + 1, 0x9e3779b1)) | 0;
-    }
+    function vseed(name) { return vseedFor(name, rng); }
     function put(name, x, z, opt) {
       opt = opt || {};
       if (opt.inset != null && !onIsland(x, z, opt.inset)) return null;
@@ -1155,19 +1410,31 @@
       // 관통 방지 — 기존 소품 발자국과 0.15m 이상 파고들면 이 자리는 버린다.
       var cs = worldCircles(name, x, z, yaw, sc);
       if (cs && !opt.force && footHit(cs)) return null;
-      var o = G('prop', name, vseed(name));
-      if (!o) return null;
-      o.position.set(x, groundH(x, z) + (opt.y || 0), z);
-      o.scale.setScalar(sc);
-      o.rotation.y = yaw;
-      if (opt.tiltY) o.rotation.z = U.randRange(rng, -opt.tiltY, opt.tiltY);
+      /* 난수 소비 순서는 예전과 **한 칸도 어긋나면 안 된다** — 어긋나는 순간
+         야드 전체 배치가 다른 그림이 된다. vseed → tiltY → 잎 색 순서 고정. */
+      var sd = vseed(name);
+      var y = groundH(x, z) + (opt.y || 0);
+      var tz = opt.tiltY ? U.randRange(rng, -opt.tiltY, opt.tiltY) : null;
       // 같은 에셋이 같은 라임 그린으로 반복되지 않도록 그루마다 잎 색을 흔들고,
       // 같은 패스에서 밑동 AO 를 정점색으로 굽는다(심사 F: 접합부 오클루전).
-      if (name === 'tree' || name === 'bush' || name === 'grassTuft' || name === 'weeds')
-        varyFoliage(o, (rng() * FOL.length) | 0);
-      if (name === 'grassTuft' || name === 'weeds') softenFoliageNormals(o, 0.78);
-      // 그림자는 **명시적으로** 켠다 — 소품이 그림자를 안 던지면 전부 떠 보인다
-      setShadow(o, opt.cast !== false, true);
+      var fol = (name === 'tree' || name === 'bush' || name === 'grassTuft' || name === 'weeds')
+              ? ((rng() * FOL.length) | 0) : -1;
+      var o = null;
+      if (INST_PROP[name]) {
+        instAdd(name, sd, x, y, z, yaw, sc, sc, sc, null, tz, fol);   // 자리만 적어 둔다
+      } else {
+        o = G('prop', name, sd);
+        if (!o) return null;
+        o.position.set(x, y, z);
+        o.scale.setScalar(sc);
+        o.rotation.y = yaw;
+        if (tz != null) o.rotation.z = tz;
+        folPrepMerge(o, fol);
+        // 그림자는 **명시적으로** 켠다 — 소품이 그림자를 안 던지면 전부 떠 보인다
+        setShadow(o, opt.cast !== false, true);
+        parent.add(o);
+        (_spend || (_spend = [])).push(o);       // 마지막에 한 덩어리로 병합
+      }
       if (cs) footAdd(cs);
       // 접지 그림자 데칼 — 밑동이 어두워져야 지면에 얹힌 것으로 읽힌다
       var f = CS_FOOT[name];
@@ -1176,7 +1443,7 @@
                    z - f[2] * Math.sin(yaw) * sc,
                    f[0] * sc, f[1] * sc, yaw, CS_SOFT[name]);
       }
-      parent.add(o); placed++;
+      placed++;
       return o;
     }
     /** 무리 짓기 — 중심에 몰리고 바깥으로 흩어진다. 규칙적으로 뿌리지 않는다. */
@@ -1397,7 +1664,10 @@
 
     // ── 6. 하늘: 새 떼 하나
     var birds = G('prop', 'birdFlock', (rng() * 1e9) | 0);
-    if (birds) { birds.position.set(-10, 26, 6); setShadow(birds, false, false); parent.add(birds); placed++; }
+    if (birds) {
+      birds.position.set(-10, 26, 6); setShadow(birds, false, false);
+      parent.add(birds); (_spend || (_spend = [])).push(birds); placed++;
+    }
 
     return placed;
   }
@@ -1407,10 +1677,10 @@
      맨 평면 + 알베도 반복은 화면에서 즉시 티가 난다. 인스턴싱이라
      수천 포기를 깔아도 드로우콜은 변형 수(3)뿐이다.
      ============================================================ */
-  /** 가벼운 잔디 포기 — 블레이드당 삼각형 4개 */
-  function tuftGeo(nb, seed, h0, h1) {
+  /** 가벼운 잔디 포기 — 블레이드당 삼각형 4개(SEG=1) 또는 8개(SEG=2) */
+  function tuftGeo(nb, seed, h0, h1, seg) {
     var r = U.rng(seed), pos = [], uvs = [], idx = [], ao = [], vi = 0, b, s;
-    var SEG = 2;
+    var SEG = seg || 2;
     for (b = 0; b < nb; b++) {
       var a = r() * U.TAU, lean = U.randRange(r, 0.28, 0.92);
       var h = U.randRange(r, h0, h1), w = U.randRange(r, 0.018, 0.032);
@@ -1521,8 +1791,15 @@
     var rng = U.rng(U.hash('carpet|' + sd));
     var NV = 3, gs = [], ims = [], fill = [0, 0, 0], i;
     var CAP = q <= 0 ? 2600 : (q === 1 ? 6000 : 11000);
+    /* 카펫은 화면 전체 삼각형의 40 % 를 혼자 먹는다(실측 33만 = 프레임의 10ms).
+       · SEG 1 : 잎 한 장을 사각형 하나로. **끝점 위치는 그대로**라 실루엣과
+         눕는 방향이 같고, 잃는 건 20cm 짜리 잎 중간의 곡률뿐이다(화면에서 1px).
+       · 저사양 티어는 포기당 잎 수도 줄인다.
+       포기 **수와 자리는 어느 티어에서도 손대지 않는다** — 줄이면 맨땅이 생긴다. */
+    var SEG = 1, NB0 = q <= 0 ? 2 : 3, NBS = q <= 0 ? 1 : 2;
     for (i = 0; i < NV; i++) {
-      gs.push(tuftGeo(3 + i * 2, U.hash('tuft' + i + '|' + sd), 0.12 + i * 0.040, 0.24 + i * 0.070));
+      gs.push(tuftGeo(NB0 + i * NBS, U.hash('tuft' + i + '|' + sd),
+                      0.12 + i * 0.040, 0.24 + i * 0.070, SEG));
       var im = new THREE.InstancedMesh(gs[i], gm, CAP);
       im.name = 'grassCarpet' + i;
       im.castShadow = false; im.receiveShadow = true;
@@ -1737,22 +2014,20 @@
         for (var w2 = 0; w2 < nW; w2++) {
           var lat = (rng() < 0.34) ? U.gauss(rng, 0, 0.38)
                                    : (rng() < 0.5 ? 1 : -1) * U.randRange(rng, 1.45, 2.42);
-          var o = G('prop', rng() < 0.13 ? 'weeds' : 'grassTuft',
-                    (U.hash('tw|' + t.id) ^ ((rng() * 6) | 0) * 0x9e37) | 0);
-          if (o) {
-            varyFoliage(o, (rng() * FOL.length) | 0);
-            softenFoliageNormals(o, 0.78);
-            evalTrack(t, s3 + U.gauss(rng, 0, 0.6), p);
-            var yw = tangentYaw(p.tan);
-            o.position.set(p.pos.x - Math.sin(yw) * lat,
-                           surfaceY(lat) - 0.035,
-                           p.pos.z - Math.cos(yw) * lat);
-            o.rotation.y = rng() * U.TAU;
-            o.rotation.z = U.randRange(rng, -0.16, 0.16);
-            o.scale.setScalar(U.randRange(rng, 0.26, 0.48));
-            setShadow(o, false, true);
-            parent.add(o); placed++;
-          }
+          /* 소품 배치와 **같은 변종 풀**을 쓴다 — 그래야 야드의 풀뭉치와 같은
+             InstancedMesh 에 얹혀 드로우콜이 한 개도 늘지 않는다.
+             난수 소비 개수는 예전과 같다(이름 1 · 변종 1 · 잎색 1 · …). */
+          var nm3 = rng() < 0.13 ? 'weeds' : 'grassTuft';
+          var sd3 = vseedFor(nm3, rng);
+          var vi3 = (rng() * FOL.length) | 0;
+          evalTrack(t, s3 + U.gauss(rng, 0, 0.6), p);
+          var yw = tangentYaw(p.tan);
+          var ry3 = rng() * U.TAU;
+          var rz3 = U.randRange(rng, -0.16, 0.16);
+          var sc3 = U.randRange(rng, 0.26, 0.48);
+          instAdd(nm3, sd3, p.pos.x - Math.sin(yw) * lat, surfaceY(lat) - 0.035,
+                  p.pos.z - Math.cos(yw) * lat, ry3, sc3, sc3, sc3, null, rz3, vi3);
+          placed++;
         }
         s3 += U.randRange(rng, 9, 26);
       }
@@ -1760,16 +2035,14 @@
       var np = 2 + ((rng() * 3) | 0);
       for (var pi2 = 0; pi2 < np; pi2++) {
         var sp = U.randRange(rng, 8, Math.max(9, t.length - 8));
-        var pu = G('prop', 'puddle', (U.hash('pud|' + t.id) ^ ((rng() * 4) | 0) * 0x85eb) | 0);
-        if (!pu) continue;
+        var sdp = vseedFor('puddle', rng);
         evalTrack(t, sp, p);
         var yy = tangentYaw(p.tan), la = U.gauss(rng, 0, 0.26);
-        pu.position.set(p.pos.x - Math.sin(yy) * la, surfaceY(la) + 0.014,
-                        p.pos.z - Math.cos(yy) * la);
-        pu.rotation.y = rng() * U.TAU;
-        pu.scale.set(U.randRange(rng, 0.34, 0.62), 1, U.randRange(rng, 0.26, 0.44));
-        setShadow(pu, false, true);
-        parent.add(pu); placed++;
+        var ryp = rng() * U.TAU;
+        var sxp = U.randRange(rng, 0.34, 0.62), szp = U.randRange(rng, 0.26, 0.44);
+        instAdd('puddle', sdp, p.pos.x - Math.sin(yy) * la, surfaceY(la) + 0.014,
+                p.pos.z - Math.cos(yy) * la, ryp, sxp, 1, szp, null, null, -1);
+        placed++;
       }
     }
     oil.count = no; dirt.count = nd;
@@ -2019,7 +2292,7 @@
     _isl.cx = -19.5; _isl.cz = 3.75; _isl.hx = 92; _isl.hz = 22;
     _isl.ax = 5.3; _isl.az = 3.3;
     _trkPts = [];
-    _fgrid = null; _csList = []; _topAvg = null;
+    _fgrid = null; _csList = []; _topAvg = null; _ipend = null; _spend = null;
 
     var root = new THREE.Group(); root.name = 'world';
     var trackGroup = new THREE.Group(); trackGroup.name = 'tracks';
@@ -2104,12 +2377,38 @@
           to.traverse(function (o) {
             if (o.isMesh && o.name === 'ballast') retileSweepUV(o, 'ballast');
           });
+          // 전환으로 움직이는 부품은 병합에서 뺀다 (텅레일 · 타이바 · 레버)
+          var tu = to.userData || {};
+          if (tu.blades) {
+            /* 슬라이드 플레이트는 텅레일이 미끄러지는 **고정** 판인데 블레이드
+               피벗에 매달려 함께 돌고 있었다. 지금 자세 그대로 분기기 쪽으로
+               떼어 붙이면(attach = 월드 변환 유지) 그림은 그대로고 병합 대상이 된다. */
+            for (var bq = 0; bq < tu.blades.length; bq++) {
+              var pv = tu.blades[bq];
+              if (!pv) continue;
+              noMerge(pv);
+              for (var cq = pv.children.length - 1; cq >= 0; cq--) {
+                if (pv.children[cq].name === 'slidePlates') to.attach(pv.children[cq]);
+              }
+            }
+          }
+          noMerge(tu.tie); noMerge(tu.lever);
           grp.add(to);
         }
       }
       t.group = grp;
       trackGroup.add(grp);
     }
+    /* 레일 · 도상 · 분기기 고정부 · 차막이는 다섯 선로를 통틀어 **한 덩어리**로
+       굽는다. 선로마다 굽으면 머티리얼 수만큼(≈7) 다시 곱해지기 때문이다.
+       침목 · 자갈은 InstancedMesh 라 그대로 두고, 그 덕분에 선로 그룹마다
+       지오메트리가 남아 Game.yardBox() 의 선로별 바운딩박스도 그대로 산다. */
+    var tgroups = [];
+    for (i = 0; i < ids.length; i++) if (TR[ids[i]].group) tgroups.push(TR[ids[i]].group);
+    /* 병합 **전에** 캐스터를 정리해야 한다 — 합치고 나면 도상만 따로 뺄 수 없다.
+       레일은 캐스터로 남긴다: 침목 위에 떨어지는 두 줄이 궤도의 입체감이다. */
+    trimShadowCasters(trackGroup);
+    mergeStaticInto(tgroups, trackGroup, 'trackStatic');
     sampleTracks();
 
     // 2b) 선로만 감싸는 상자 — Render 의 카메라 프레이밍용 (world.yardBounds)
@@ -2144,6 +2443,9 @@
       // 밑동 절벽은 캐스터에서 빼서 섀도우 프러스텀/비용을 아낀다.
       if (island.userData && island.userData.top) island.userData.top.castShadow = true;
       root.add(island);
+      /* 섬은 병합하지 않는다 — 메시가 5개뿐이라 이득이 3콜인데,
+         Game.footprint() 가 userData.top/wall 의 **정점을 직접 읽어** 카메라
+         프레이밍용 윤곽을 만든다. 여기서 합치면 그 참조가 끊어진다. */
     }
 
     // 4) 차량
@@ -2186,6 +2488,9 @@
     grassCarpet(propsGroup, sd);
     trackGrime(propsGroup, sd);
     gravelSpill(propsGroup, sd);
+    // 소품 · 궤도변 잡초가 모두 자리를 잡은 뒤 한 번에 굽는다 (같은 변종 = 한 메시)
+    bakeInstProps(propsGroup);
+    bakeStaticProps(propsGroup, root);      // 신호기·가로등·나무 … → 한 덩어리
     buildContacts(propsGroup);              // 예약된 접지 그림자를 한 방에 굽는다
 
     // 7) 기본 시각은 SPEC §3.2 의 골든아워 키프레임. Game 이 뒤이어 레벨의
@@ -2195,6 +2500,8 @@
         SH.Render.setTimeOfDay(typeof levelDef.timeOfDay === 'number' ? levelDef.timeOfDay : 0.35);
       } catch (e) { U.err(e); }
     }
+
+    trimShadowCasters(root);        // 실루엣에 기여하지 않는 캐스터를 걷어낸다
 
     if (scene) scene.add(root);
 
@@ -2212,6 +2519,8 @@
   /* ── 정리 ───────────────────────────────────────────────── */
   function disposeObj(o) {
     o.traverse(function (n) {
+      // 인스턴스 버퍼(행렬·컬러)는 InstancedMesh 가 따로 들고 있다 — 먼저 버린다.
+      if (n.isInstancedMesh && n.dispose) { try { n.dispose(); } catch (e0) { U.err(e0); } }
       if (n.geometry && n.geometry.dispose) { try { n.geometry.dispose(); } catch (e) { U.err(e); } }
       // 재질/텍스처는 SH.Mat 이 공유·소유하므로 여기서 dispose 하지 않는다.
     });
@@ -2229,7 +2538,10 @@
     // 접지 데칼은 위에서 방금 버렸으므로 캐시를 반드시 끊는다 (죽은 GPU 핸들 재사용 방지).
     // 지오메트리는 disposeObj 가 이미 버렸다.
     _csTex = null; _csMat = null; _csGeo = null; _csList = [];
-    _fgrid = null; _topAvg = null;
+    _fgrid = null; _topAvg = null; _ipend = null; _spend = null;
+    // 프레이밍용 상자 프록시의 지오메트리/재질은 World 소유 — 같이 버린다
+    if (_bxGeo) { try { _bxGeo.dispose(); } catch (eb) { } _bxGeo = null; }
+    if (_bxMat) { try { _bxMat.dispose(); } catch (eb2) { } _bxMat = null; }
     // _matPool 은 비우지 않는다 — 베이스 재질(Mat 소유)이 살아 있는 한 재사용해야
     // 레벨을 바꿀 때마다 잎 재질 클론이 쌓이지 않는다.
     world = null; TR = null; World.current = null;

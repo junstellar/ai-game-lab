@@ -1929,10 +1929,20 @@ SH.Game = (function () {
     if (fpsT >= 0.5) { fpsNow = frames / fpsT; frames = 0; fpsT = 0; }
     if (!qualityForced) {
       if (fpsNow < 27) lowT += dt; else lowT = Math.max(0, lowT - dt * 0.6);
-      if (lowT > 4 && quality > 0) {
+      if (lowT > 4) {
         lowT = 0;
-        setQuality(quality - 1);
-        M('UI', 'toast', '부드럽게 돌아가도록 화질을 한 단계 낮췄어요.');
+        /* ★ 반드시 **렌더러의 실제 티어**에서 한 단계 내려야 한다.
+           예전엔 Game 의 지역 카운터(부팅값 2)에서 내렸는데, 그 사이 Render.autoQuality 가
+           스스로 0 까지 내려가 있으면 setQuality(1) 이 되어 **강등이 승격**이 됐다.
+           실측(CPU 4x)에서 이 순간 fps 6.3 → 2.9, 드로우콜 2,670 → 4,098 로 튀었다. */
+        var cur = (SH.Render && typeof SH.Render.quality === 'number')
+          ? SH.Render.quality : quality;
+        if (cur > 0) {
+          setQuality(cur - 1);
+          M('UI', 'toast', '부드럽게 돌아가도록 화질을 한 단계 낮췄어요.');
+        } else {
+          setQualityQuiet(0);          /* 이미 최저 — 카운터만 렌더러에 맞춘다 */
+        }
       }
     }
   }
@@ -2328,7 +2338,11 @@ SH.Game = (function () {
       fps: Math.round(fpsNow * 10) / 10,
       tris: i ? (i.render.triangles | 0) : 0,
       calls: i ? (i.render.calls | 0) : 0,
-      quality: quality,
+      /* quality 는 **렌더러의 실제 값**을 보고한다. 예전엔 Game 의 지역 변수를 그대로 내보냈는데,
+         Render.autoQuality 가 내부적으로 강등해도 Game 에는 통보되지 않아 계측이 거짓말을 했다
+         (실제로 강등이 일어난 상황을 "강등 안 됨" 으로 오판했다). qualityGame 은 참고용. */
+      quality: (SH.Render && typeof SH.Render.quality === 'number') ? SH.Render.quality : quality,
+      qualityGame: quality,
       phase: phase,
       level: curIndex,
       levelId: def ? def.id : null,
