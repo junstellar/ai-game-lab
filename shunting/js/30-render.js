@@ -11,7 +11,10 @@
    Render.scene / .camera / .renderer / .maxAniso / .sunDir / .quality / .info
    Render.frame(dt)                 // 한 프레임 렌더 (Game 이 매 rAF 호출)
    Render.setQuality(q)             // 0 low | 1 med | 2 high
-   Render.autoQuality(dt)           // frame() 이 내부 호출. 저사양 자동 강등(최대 2단)
+   Render.autoQuality(dt)           // frame() 이 내부 호출. 저사양 자동 강등
+   Render.setAutoQuality(on, budget)// 자동 강등 on/off + 남은 허용 횟수(0~2)
+   Render.suspend(on)               // true 면 frame() 이 아무것도 그리지 않는다 (컴파일 대기용)
+   Render.precompile(done, ms, slice)// 셰이더 프로그램 선컴파일. slice ms 씩 나눠 걸고 done()
    Render.resize()
    Render.frameBounds(box3, opts)   // opts {margin, instant, azimuth, elevation, yBias}
    Render.orbit(dx,dy) / .zoom(dz) / .pan(dx,dy)      // 픽셀 델타
@@ -292,7 +295,16 @@
     /* info */
     var info = { fps: 60, tris: 0, calls: 0, quality: 2 };
     var _fpsAcc = 0, _fpsN = 0;
-    var _downgrades = 0;        /* autoQuality 가 내린 횟수 (최대 2) */
+    /* ── 티어 전환 비용 관리 ────────────────────────────────────────
+       티어가 바뀌면 머티리얼 디파인이 바뀌고, **다음 렌더에서** 드라이버가 프로그램을
+       전부 다시 컴파일한다. 실측(통합그래픽)으로 그게 한 프레임 10.3초다. 그래서
+         · _aqLeft  — 남은 자동 강등 횟수. 부팅 중 티어를 확정하면 Game 이 1로 줄인다.
+         · _aqOn    — 자동 강등 자체를 끄는 스위치 (부팅 중·강제 품질일 때 끈다).
+         · _suspend — 프로그램이 준비될 때까지 frame() 이 아예 그리지 않는다.
+                      캔버스는 직전 화면이 남지만 메인 스레드는 막히지 않는다. */
+    var _aqLeft = 2;            /* autoQuality 가 앞으로 내릴 수 있는 횟수 */
+    var _aqOn = true;
+    var _suspend = false;
 
     /* 스크래치 */
     var _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
@@ -1978,7 +1990,7 @@
     }
 
     function autoQuality(/* dt 는 쓰지 않는다 — 상단 주석 참조 */) {
-      if (!renderer || _downgrades >= 2 || _quality <= 0) return;
+      if (!renderer || !_aqOn || _aqLeft <= 0 || _quality <= 0 || _suspend) return;
       var now = U.now();
       if (!_aqLast) { _aqLast = now; aqReset(now); return; }
       var real = (now - _aqLast) / 1000;
@@ -1993,8 +2005,8 @@
          1.5fps 에서 1초 창을 채우려면 그것만으로도 이미 몇 초가 지나간다. */
       if (real > AQ_PANIC_S) {
         if (++_aqPanic >= 3) {
-          _downgrades = 2;                 // 더 내려갈 곳이 없으니 여기서 끝낸다
-          setQuality(0);
+          _aqLeft = 0;                     // 더 내려갈 곳이 없으니 여기서 끝낸다
+          qualityDrop(0);
           aqReset(now, AQ_COOL_MS);
           return;
         }
@@ -2006,10 +2018,168 @@
       var fps = _aqWinN / _aqWinT;
       _aqWinT = 0; _aqWinN = 0;
       if (fps < AQ_TARGET) {
-        _downgrades++;
-        setQuality(_quality - 1);
+        _aqLeft--;
+        qualityDrop(_quality - 1);
         aqReset(now, AQ_COOL_MS);
       }
+    }
+
+    /* autoQuality 가 스스로 내릴 때도 **Game 을 거친다**. Game.setQuality 가
+       Mat/FX 까지 함께 맞추고, 렌더를 잠깐 세운 뒤 프로그램을 미리 컴파일해
+       한 프레임 10초를 막기 때문이다. Game 이 없으면(단독 사용) 예전처럼 직접 내린다. */
+    function qualityDrop(q) {
+      if (SH.Game && typeof SH.Game.setQuality === 'function') {
+        try { SH.Game.setQuality(q); return; } catch (e) { U.err(e); }
+      }
+      setQuality(q);
+    }
+
+    /** 자동 강등 스위치. budget 은 앞으로 허용할 강등 횟수(0~2). */
+    function setAutoQuality(on, budget) {
+      _aqOn = (on !== false);
+      if (typeof budget === 'number') _aqLeft = U.clamp(budget | 0, 0, 2);
+      _aqLast = 0;
+      aqReset(U.now());
+      return _aqLeft;
+    }
+
+    /** 렌더 정지/재개. 정지 중에는 frame() 이 한 줄도 그리지 않는다. */
+    function suspend(on) {
+      _suspend = !!on;
+      /* 재개 직후 프레임은 판단에서 제외한다. 리사이즈를 강제로 걸지는 않는다 —
+         setQuality 가 이미 걸었고, 여기서 또 걸면 재개 첫 프레임에 RT 재할당이
+         통째로 얹혀 그 프레임만 0.7초가 된다(실측). 창 크기 변화는 frame() 이
+         20틱마다 스스로 확인한다. */
+      if (!_suspend) { _aqLast = 0; aqReset(U.now()); }
+      return _suspend;
+    }
+
+    /* ── 셰이더 선컴파일 ──────────────────────────────────────────────
+       티어가 바뀌면 다음 렌더에서 드라이버가 프로그램을 전부 다시 컴파일한다.
+       renderer.render() 안에서 하면 프로그램마다 링크 완료를 **순서대로 기다리므로**
+       그 합이 통째로 한 프레임에 얹힌다(실측 10.3초).
+       compileAsync 는 프로그램을 전부 먼저 걸어 둔 뒤(=드라이버가 병렬로 링크)
+       KHR_parallel_shader_compile 로 완료만 폴링하므로 메인 스레드가 막히지 않는다.
+       r160 UMD 번들에 존재하는 것을 확인하고 쓰되, 없으면 동기 compile 로 떨어진다.
+       풀스크린 패스 머티리얼(SSAO·합성)은 씬 밖에 살아서 traverse 에 안 걸리므로
+       quadMesh 에 잠깐 얹어 같이 컴파일한다 — SSAO 프래그먼트가 가장 무겁다.
+
+       ★ 렌더 타겟을 실제 패스와 똑같이 맞춰 놓고 컴파일해야 한다. three 의 프로그램
+       캐시 키에 outputColorSpace 가 들어 있고, 그 값이 **현재 렌더 타겟이 null 인지**로
+       갈리기 때문이다(캔버스=sRGB, 오프스크린=working). 타겟을 안 맞추고 컴파일하면
+       엉뚱한 프로그램만 만들어 두고 실제 렌더에서 전부 다시 컴파일한다 —
+       실측으로 이걸 틀렸을 때 선컴파일을 하고도 9.3초짜리 프레임이 그대로 남았다.
+
+       ★★ 그리고 **한 번에 다 하지 않는다**. compileAsync 는 링크 완료만 비동기로 기다릴
+       뿐, GLSL→HLSL 변환은 호출한 스레드에서 벌어진다(실측: 씬 전체를 한 방에 걸었더니
+       3,216ms 동안 메인 스레드가 막혔다 — rAF 최대 간격 3,334ms). 그래서 오브젝트를
+       하나씩 걸면서 slice 예산(ms)을 넘으면 rAF 로 양보한다. 로딩 화면 뒤에서는 예산을
+       크게(빨리 끝내고), 플레이 중에는 작게(프레임을 짧게) 준다.
+
+       three 의 compile(t, camera, targetScene) 은 t 만 traverse 하고 조명·안개는
+       targetScene 에서 가져온다. t 에 조명이 섞이면 **조명 개수가 두 배로 세어져**
+       프로그램 키가 달라진다 — 그래서 t 로 넘기는 오브젝트는 조명이 아니고, 자식도
+       잠깐 떼어 놓는다(아래). 결과적으로 t 아래에 조명이 들어갈 길이 없다. */
+    var EMPTY_KIDS = [];
+
+    function compileSync(sc, cam, target, targetScene) {
+      renderer.setRenderTarget(target || null);
+      renderer.compile(sc, cam, targetScene || null);
+    }
+
+    function compileOne(sc, cam, target, targetScene) {
+      renderer.setRenderTarget(target || null);
+      if (typeof renderer.compileAsync === 'function') {
+        return renderer.compileAsync(sc, cam, targetScene || null);
+      }
+      renderer.compile(sc, cam, targetScene || null);
+      return null;
+    }
+
+    function precompile(done, budgetMs, sliceMs) {
+      var fired = false;
+      function fin() {
+        if (fired) return;
+        fired = true;
+        try { renderer.setRenderTarget(null); } catch (e) { }
+        if (done) { try { done(); } catch (e) { U.err(e); } }
+      }
+      if (!renderer || !scene || !camera || disposed) { fin(); return; }
+      var timer = setTimeout(fin, Math.max(400, budgetMs || 12000));
+
+      var slice = Math.max(4, sliceMs || 8);
+      var pend = 0, listed = false;
+      function check() { if (listed && pend <= 0) { clearTimeout(timer); fin(); } }
+      function sub() { pend--; check(); }
+      function track(p) { if (!p) return; pend++; try { p.then(sub, sub); } catch (e) { sub(); } }
+
+      /* ── 대상 목록 ── */
+      var items = [];
+      try {
+        /* 머티리얼이 배열인 오브젝트는 **하나씩** 쪼갠다. 한 번에 걸면 프로그램
+           예닐곱 개가 한 프레임에 몰린다(실측: propsStatic 한 방에 583ms / 6개). */
+        scene.traverse(function (o) {
+          var mm = o.material;
+          if (!mm || o.isLight) return;
+          if (Array.isArray(mm)) {
+            for (var k = 0; k < mm.length; k++) if (mm[k]) items.push({ o: o, mi: k });
+          } else items.push(o);
+        });
+        if (post && quadScene && quadMesh && quadCam && mainRT) {
+          /* 이번 티어에서 **실제로 쓰이는** 패스만. 오프스크린은 색공간이 다 같으므로
+             대표로 mainRT 를 물려 둔다(aoRT/bloomRT 는 티어에 따라 아예 없을 수 있다).
+             합성만 캔버스(null)로 나간다 — 여기가 색공간이 갈리는 지점이다. */
+          if (_q.ssao) { items.push({ mat: ssaoMat }); items.push({ mat: blurMat }); }
+          if (bloomRT.length > 0) {
+            items.push({ mat: preMat }); items.push({ mat: downMat }); items.push({ mat: upMat });
+          }
+          items.push({ mat: compMat, canvas: true });
+        }
+      } catch (e) { U.err(e); }
+
+      var idx = 0;
+      function pump() {
+        if (disposed || !renderer) { listed = true; check(); return; }
+        var t0 = U.now();
+        while (idx < items.length) {
+          var it = items[idx++];
+          try {
+            if (it.isObject3D) {
+              /* 오브젝트는 **동기** compile 로 건다. compileAsync 를 161번 부르면
+                 10ms 폴러가 161개 생겨 그게 더 비싸다 — 완료 대기는 아래에서 한 번에 한다.
+                 자식은 잠깐 떼어 놓는다. three 의 compile 은 t 를 통째로 traverse 하므로
+                 가지 하나에 프로그램이 수십 개 매달리면 그게 그대로 한 프레임이 된다
+                 (자식들도 목록에 따로 들어 있으니 빠지는 것은 없다). */
+              var kids = it.children;
+              it.children = EMPTY_KIDS;
+              try { compileSync(it, camera, post ? mainRT : null, scene); }
+              finally { it.children = kids; }
+            } else if (it.o) {
+              /* 배열 머티리얼 한 칸만 — 잠깐 단일 머티리얼로 바꿔 걸고 되돌린다.
+                 프로그램 키는 (머티리얼, 오브젝트)로 정해지므로 결과는 동일하다. */
+              var kids2 = it.o.children, arr = it.o.material;
+              it.o.children = EMPTY_KIDS;
+              it.o.material = arr[it.mi];
+              try { compileSync(it.o, camera, post ? mainRT : null, scene); }
+              finally { it.o.children = kids2; it.o.material = arr; }
+            } else if (it.mat) {
+              var keep = quadMesh.material;
+              quadMesh.material = it.mat;
+              track(compileOne(quadScene, quadCam, it.canvas ? null : mainRT, null));
+              quadMesh.material = keep;
+            }
+          } catch (e) { U.err(e); }
+          if (U.now() - t0 >= slice) break;
+        }
+        if (idx < items.length) { requestAnimationFrame(pump); return; }
+        /* 씬 전체를 한 번 더 — 프로그램은 이미 다 만들어져 있으므로 이 호출은 싸고,
+           폴러 하나로 **전부의 링크 완료**를 기다릴 수 있다. */
+        try { track(compileOne(scene, camera, post ? mainRT : null, null)); }
+        catch (e) { U.err(e); }
+        listed = true;
+        check();
+      }
+      pump();
     }
 
     /* ══════════════════════════════════════════════════════════════════
@@ -2300,6 +2470,9 @@
 
     function frame(dt) {
       if (!renderer || !scene || !camera || disposed) return;
+      /* 티어 전환 직후 — 프로그램이 준비될 때까지 한 줄도 그리지 않는다.
+         여기서 그리면 드라이버가 링크 완료를 순서대로 기다려 한 프레임이 10초가 된다. */
+      if (_suspend) return;
       dt = (typeof dt === 'number' && isFinite(dt)) ? U.clamp(dt, 0, 0.1) : 0.0166;
       _t += dt;
       _frames++;
@@ -2504,6 +2677,9 @@
       resize: resize,
       setQuality: setQuality,
       autoQuality: autoQuality,
+      setAutoQuality: setAutoQuality,
+      suspend: suspend,
+      precompile: precompile,
       frameBounds: frameBounds,
       orbit: orbit,
       zoom: zoom,

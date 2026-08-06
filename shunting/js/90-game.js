@@ -15,7 +15,7 @@
    SH.Game.cut(k)                  분리 시도
    SH.Game.undo() / .restart() / .hint() / .next()
    SH.Game.loadLevel(i)            레벨 교체
-   SH.Game.setQuality(q)
+   SH.Game.setQuality(q)           같은 티어면 무시. 플레이 중이면 선컴파일 뒤 적용(비동기).
    SH.Game.isBusy()                애니메이션 중이면 true
    SH.Game.rules(open)             규칙 카드 열기/닫기 (UI.rules 가 없으면 토스트로 대체)
    SH.Game.tutorialSkip()          현재 레벨 튜토리얼 건너뛰기
@@ -135,6 +135,12 @@ SH.Game = (function () {
   var canvasEl = null;
   var phase = 'BOOT';
   var quality = 2, qualityForced = false;
+  /* qualityApplied — 실제로 모듈들에 **적용된** 티어. 같은 값을 다시 적용하면
+     셰이더가 통째로 재컴파일되므로(한 프레임 10초) 중복 적용을 여기서 막는다.
+     qReady — 로딩 화면이 내려간 뒤인가. 부팅 중에는 즉시 적용해도 안전하다.
+     qBusy  — 선컴파일 대기 중. 그 사이 들어온 요청은 무시한다. */
+  var qualityApplied = -1, qReady = false, qBusy = false;
+  var calibrated = false, gameDropped = false;
   var world = null, def = null, st = null;
   var curIndex = 0;
   var undoStack = [], hintsUsed = 0;
@@ -372,13 +378,49 @@ SH.Game = (function () {
 
   function setQualityQuiet(q) { quality = U.clamp(q | 0, 0, 2); Game.quality = quality; }
 
+  function applyQualityNow(q) {
+    qualityApplied = q;
+    M('Render', 'setQuality', q);
+    M('Mat', 'setQuality', q);
+    M('FX', 'setQuality', q);
+    emit('quality', q);
+  }
+
+  /* ★ 티어 전환은 **한 프레임을 10초로 만든다** (실측 10,299ms).
+     월드 재생성이 아니다 — 지오메트리 개수는 그대로다. Mat.setQuality 가 모든
+     머티리얼에 needsUpdate 를 걸면 다음 renderer.render() 안에서 드라이버가
+     프로그램을 하나씩 순서대로 다시 컴파일하고, 그 합이 통째로 한 프레임에 얹힌다.
+     그래서 여기서 두 가지를 한다.
+       1) 같은 티어면 **아무 일도 하지 않는다**. 예전엔 setQuality(2) 를 다시 불러도
+          전 머티리얼이 재컴파일 대상이 됐다.
+       2) 플레이 중이면 렌더를 잠깐 세우고 프로그램을 먼저 준비한 뒤 재개한다.
+          캔버스는 직전 화면이 남지만 메인 스레드는 막히지 않는다(입력·UI·소리 계속). */
   function setQuality(q) {
-    quality = U.clamp(q | 0, 0, 2);
-    Game.quality = quality;
-    M('Render', 'setQuality', quality);
-    M('Mat', 'setQuality', quality);
-    M('FX', 'setQuality', quality);
-    emit('quality', quality);
+    q = U.clamp(q | 0, 0, 2);
+    quality = q;
+    Game.quality = q;
+    /* 렌더러가 이미 그 티어인지도 같이 본다 — 누가 Render.setQuality 를 직접 불러
+       둘이 어긋났으면 건너뛰면 안 된다(검증 도구가 실제로 그렇게 부른다). */
+    var rq = (SH.Render && typeof SH.Render.quality === 'number') ? SH.Render.quality : q;
+    if (q === qualityApplied && q === rq) return;
+
+    var canDefer = qReady && SH.Render &&
+      typeof SH.Render.suspend === 'function' &&
+      typeof SH.Render.precompile === 'function';
+
+    if (!canDefer) { applyQualityNow(q); return; }
+    if (qBusy) return;
+    /* 플레이 중 강등은 한 번이면 족하다 — Render.autoQuality 든 아래 감시자든,
+       먼저 내린 쪽이 그 한 번을 쓴다. */
+    gameDropped = true;
+    qBusy = true;
+    M('Render', 'suspend', true);
+    applyQualityNow(q);
+    /* 플레이 중이므로 조각은 잘게 — 한 프레임이 길어지면 안 된다 */
+    M('Render', 'precompile', function () {
+      qBusy = false;
+      M('Render', 'suspend', false);
+    }, 15000, 6);
   }
 
   /* ── 에러 안전망 ──────────────────────────────────────────── */
@@ -464,7 +506,13 @@ SH.Game = (function () {
 
     runSteps([
       [0.04, '기기 성능 확인', function () { setQualityQuiet(detectQuality()); }],
-      [0.10, '렌더러 준비', function () { M('Render', 'init', canvasEl); setQuality(quality); }],
+      [0.10, '렌더러 준비', function () {
+        M('Render', 'init', canvasEl);
+        /* 부팅 중에는 자동 강등을 끈다 — 티어는 calibrateQuality() 가 로딩 화면
+           뒤에서 확정하고, 그 뒤에 다시 켠다(허용 1회). */
+        M('Render', 'setAutoQuality', false);
+        setQuality(quality);
+      }],
       [0.20, '텍스처 굽는 중', function () { M('Tex', 'build', quality); }],
       [0.46, '재질 준비', function () { M('Mat', 'build'); M('Mat', 'setQuality', quality); }],
       [0.56, '레벨 불러오기', function () { pickStartLevel(); }],
@@ -489,11 +537,91 @@ SH.Game = (function () {
       [0.97, '소리 준비', function () {
         M('Audio', 'init'); M('Audio', 'mute', muted); armAudioUnlock(); armShotRelease();
       }],
-      [1.00, '첫 장면 그리는 중', function () { renderFrame(0); }]
-    ], 0, bootFinished);
+      [0.98, '첫 장면 그리는 중', function () { renderFrame(0); }]
+    ], 0, function () { calibrateQuality(bootFinished); });
+  }
+
+  /* ── 부팅 중 티어 확정 ──────────────────────────────────────────────
+     detectQuality() 는 코어 수·메모리로 **추측**만 한다. 추측이 틀리면 플레이 도중에
+     티어가 내려가고, 그 순간 셰이더가 전부 재컴파일되어 화면이 통째로 멈춘다
+     (실측 10.3초, 저사양 폰은 강등이 두 번이라 20초 넘게 얼어붙었다).
+     그래서 여기서 **실제로 몇 프레임 그려 보고** 티어를 확정한다. 느리면 그 자리에서
+     내리고, 재컴파일까지 로딩 화면 뒤에서 끝낸 뒤에야 게임을 넘긴다.
+
+     비용은 짧게 잡는다. 빠른 기기는 표본 14장 ≈ 0.25초로 끝나고 강등이 없으므로
+     추가 비용이 사실상 없다. 느린 기기도 측정은 1초 안에서 끊는다(CAL_HARD).
+     프레임 시간은 평균이 아니라 **중앙값**을 쓴다 — 텍스처 업로드 같은 한 번짜리
+     튐이 평균을 망가뜨려 멀쩡한 기기를 강등시키는 걸 막는다. */
+  var CAL_WARM = 3;        /* 버리는 프레임 (직전 프레임이 곧 첫 컴파일이다) */
+  var CAL_MIN = 3;
+  var CAL_MAX = 14;
+  var CAL_MS = 450;        /* 표본 수집 목표 시간 */
+  var CAL_HARD = 1000;     /* 측정 전체 상한 — 부팅을 늘리지 않는다 */
+
+  function measureFrameFps(cb) {
+    var warm = CAL_WARM, n = 0, last = 0, t0 = U.now();
+    var dts = [];
+    function tick() {
+      renderFrame(0);
+      var t = U.now();
+      if (warm > 0) { warm--; last = t; requestAnimationFrame(tick); return; }
+      if (last) { dts.push(t - last); n++; }
+      last = t;
+      var acc = t - t0;
+      var enough = (n >= CAL_MIN && (n >= CAL_MAX || acc >= CAL_MS + CAL_WARM * 16));
+      if (!enough && acc < CAL_HARD) { requestAnimationFrame(tick); return; }
+      if (!dts.length) { cb(60); return; }
+      dts.sort(function (a, b) { return a - b; });
+      var med = dts[dts.length >> 1];
+      cb(med > 0 ? 1000 / med : 60);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  /** 로딩 화면 뒤에서 n 프레임 흘려보낸다 (컴파일된 프로그램을 실제로 한 번 태운다). */
+  function flushFrames(n, cb) {
+    function tick() {
+      renderFrame(0);
+      if (--n > 0) { requestAnimationFrame(tick); return; }
+      cb();
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function calibrateQuality(done) {
+    var haveRenderer = !!(SH.Render && SH.Render.renderer);
+    if (qualityForced || shotMode || !haveRenderer) { done(); return; }
+
+    U.boot(0.985, '기기 속도 재는 중');
+    measureFrameFps(function (fps) {
+      calibrated = true;
+      /* 임계값 — autoQuality 의 목표(32fps)에 맞춘다. 여유를 두고,
+         한참 모자라면 한 단계씩 내려 두 번 멈추는 대신 **한 번에** 최저로 간다. */
+      var tgt = quality;
+      if (fps < 20) tgt = 0;
+      else if (fps < 30) tgt = quality - 1;
+      tgt = U.clamp(tgt, 0, quality);
+      if (tgt >= quality) { done(); return; }
+
+      /* 메시지를 먼저 **그리게** 한 뒤 무거운 일을 시작한다(runSteps 와 같은 양보 패턴).
+         rAF 콜백은 페인트 직전이므로 setTimeout 으로 한 번 더 넘겨야 글자가 실제로 뜬다. */
+      yieldTo('이 기기에 맞게 화질 맞추는 중', 0.99, function () {
+        setQuality(tgt);                  /* qReady 전이라 즉시 적용된다 */
+        /* 로딩 화면 뒤라 조각을 크게 잡는다 — 프레임이 길어도 보이지 않고, 빨리 끝난다 */
+        yieldTo('그림 다시 준비하는 중', 0.995, function () {
+          M('Render', 'precompile', function () { flushFrames(3, done); }, 25000, 120);
+        });
+      });
+    });
+  }
+
+  function yieldTo(msg, pct, fn) {
+    U.boot(pct, msg);
+    requestAnimationFrame(function () { setTimeout(fn, 0); });
   }
 
   function bootFinished() {
+    U.boot(1.00, '첫 장면 그리는 중');
     window.addEventListener('resize', onResize, { passive: true });
     window.addEventListener('orientationchange', onResize, { passive: true });
     document.addEventListener('visibilitychange', onVisibility);
@@ -505,6 +633,13 @@ SH.Game = (function () {
 
     setPhase(shotMode ? 'PLAY' : 'TITLE');
     M('Input', 'setEnabled', true);
+
+    /* 여기부터는 티어를 바꾸면 재컴파일이 **플레이 중에** 일어난다 → 지연 적용 경로를 켠다. */
+    qReady = true;
+    /* 부팅 중 실측으로 티어를 확정했으면 플레이 중 강등은 보험으로 **한 번만** 남긴다
+       (측정이 틀렸을 때를 위해서다). 측정을 건너뛴 경우에만 예전처럼 두 번 허용한다.
+       강제 품질(?q=)이면 아예 끈다 — 사용자가 고른 화질을 마음대로 깎지 않는다. */
+    M('Render', 'setAutoQuality', !qualityForced && !shotMode, calibrated ? 1 : 2);
 
     startLoop();
     SHOT.ready = true;
@@ -1927,7 +2062,11 @@ SH.Game = (function () {
     // fps 측정 + 적응형 품질
     fpsT += dt;
     if (fpsT >= 0.5) { fpsNow = frames / fpsT; frames = 0; fpsT = 0; }
-    if (!qualityForced) {
+    /* 감시자는 **최후의 보험**이다. 티어는 부팅 중에 실측으로 확정했고(calibrateQuality),
+       여기서 한 번 더 내리는 건 그 측정이 틀렸을 때뿐이다. 두 번 내리지 않는다 —
+       강등 한 번마다 셰이더가 전부 재컴파일되기 때문이다. 선컴파일이 도는 동안(qBusy)
+       프레임은 어차피 안 그려지므로 fps 를 믿을 수 없다. 그때는 판단을 멈춘다. */
+    if (!qualityForced && !gameDropped && !qBusy) {
       if (fpsNow < 27) lowT += dt; else lowT = Math.max(0, lowT - dt * 0.6);
       if (lowT > 4) {
         lowT = 0;
@@ -1938,12 +2077,15 @@ SH.Game = (function () {
         var cur = (SH.Render && typeof SH.Render.quality === 'number')
           ? SH.Render.quality : quality;
         if (cur > 0) {
+          gameDropped = true;
           setQuality(cur - 1);
           M('UI', 'toast', '부드럽게 돌아가도록 화질을 한 단계 낮췄어요.');
         } else {
           setQualityQuiet(0);          /* 이미 최저 — 카운터만 렌더러에 맞춘다 */
         }
       }
+    } else if (qBusy) {
+      lowT = 0; frames = 0; fpsT = 0;
     }
   }
 
