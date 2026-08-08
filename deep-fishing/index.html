@@ -211,6 +211,15 @@
       escape:function(){ tone(400,140,0.28,'sine',0.14); },
       land:function(rk){ var f=520+rk*90; tone(f,f*1.5,0.13,'triangle',0.22);
         setTimeout(function(){ tone(f*1.5,f*2,0.14,'sine',0.18); },80); },
+      // 릴을 감는 '드르륵' 래칫 — 끌어올릴수록 음이 높아진다
+      ratchet:function(pr){ tone(150+pr*130, 130+pr*120, 0.035, 'square', 0.055); },
+      // 심해 앰비언트 — 깊을수록 낮고 묵직하게 울린다
+      ambient:function(t){ if(!ac) return; var f=70-t*26;
+        tone(f, f*0.92, 1.7, 'sine', 0.05+t*0.045);
+        noise(1.4, 0.012+t*0.012, 180-t*60, 90, 0.5); },
+      // 물고기가 파고들며 줄이 나가는 소리
+      dive:function(){ noise(0.5,0.20,1500,260,0.9); tone(300,110,0.45,'sawtooth',0.13); },
+      splashBig:function(){ noise(0.4,0.30,2400,600,0.7); },
       legend:function(){ noise(0.5,0.22,500,3000,0.6); tone(300,1200,0.4,'sawtooth',0.2); }
     };
   })();
@@ -223,7 +232,7 @@
   /* 입질 연출: 물고기가 옆에서 다가와 미끼를 툭툭 건드리다(페인트) 확 문다 */
   var fx, fy, fside, fscale, nibbleT, nibbles, bobAmp, hookScreenY, biteFlash, splashes=[];
   var sinkSpd=0, lastZone=null, zoneFlash=0, zoneFlashName='', hookedW=0;
-  var inZone=0, zoneFrames=0, lastAcc=0;
+  var inZone=0, zoneFrames=0, lastAcc=0, diveT=0, diveCool=0, diveCount=0;
   var STAGE_MAX_DEPTH=MAXDEPTH;
 
   function D(){ return DIFFS[diff]||DIFFS.normal; }
@@ -300,7 +309,7 @@
       return;
     }
     if(state==='bite'){
-      state='fight'; tension=0.45; prog=0; pullT=0; pulling=false; struggle=0; fightT=0; inZone=0; zoneFrames=0;
+      state='fight'; tension=0.45; prog=0; pullT=0; pulling=false; struggle=0; fightT=0; inZone=0; zoneFrames=0; diveT=0; diveCool=150; diveCount=0;
       Snd.splash(); toast('걸렸다! 감아올려요 🎣','#ffd36e');
     }
   }
@@ -325,7 +334,10 @@
     var isNew = !dexStore()[hooked.id];
     dexAdd(hooked.id, w);
     caught.push({f:hooked, w:w, pts:pts});
-    lastCatch={ f:hooked, w:w, pts:pts, isNew:isNew, t:0, acc:acc, perfect:perfect, base:base, accBonus:accBonus };
+    lastCatch={ f:hooked, w:w, pts:pts, isNew:isNew, t:0, acc:acc, perfect:perfect, base:base, accBonus:accBonus,
+                fromY:(fy||0.55), scale:(fscale||0.7) };
+    spawnSplash();
+    Snd.splashBig();
     if(hooked.r>=4){ comboRare++; Snd.legend(); } else Snd.land(hooked.r);
     if(hooked.r>=5) ach('legend'); if(isNew) ach('first_new');
     if(dexCount()>=10) ach('dex10'); if(dexCount()>=20) ach('dex20');
@@ -369,6 +381,9 @@
     if(shakeT>0) shakeT--;
     if(state!=='sink') sinkSpd*=0.90;
     if(zoneFlash>0) zoneFlash--;
+    // 심해 앰비언트(깊이에 따라 톤이 낮아짐)
+    if((state==='sink'||state==='wait'||state==='bite'||state==='fight') && frame%110===0)
+      Snd.ambient(Math.min(1, curDepth/MAXDEPTH));
     for(var i=0;i<bubbles.length;i++){ var b=bubbles[i]; b.y-=b.sp*0.0016 + sinkSpd*0.00055; if(b.y<0){ b.y=1; b.x=Math.random(); } }
     for(var j=0;j<fishSwim.length;j++){ var s=fishSwim[j]; s.x+=s.sp*0.0016; s.y-=sinkSpd*0.00042;
       if(s.y<-0.05){ s.y=1.05; s.x=Math.random(); } if(s.x<-0.1) s.x=1.1; if(s.x>1.1) s.x=-0.1; }
@@ -443,16 +458,28 @@
     var freq = 26 / (f.pf*d.pull);
     if(pullT % Math.max(8, Math.round(freq)) === 0) struggle = 0.6 + Math.random()*0.7;
     if(struggle>0) struggle*=0.92;
-    var pullForce = f.pw * d.pull * (0.15 + struggle) * 0.011;
+    /* 밀당 — 가끔 물고기가 아래로 파고든다(질주).
+       이때는 감으면 줄이 끊어지니 손을 떼고 버텨야 한다. */
+    if(diveCool>0) diveCool--;
+    if(diveT>0){ diveT--; if(diveT===0) diveCool=260+Math.random()*160; }
+    else if(diveCool<=0 && prog>0.25 && diveCount<2 && Math.random()<0.004*f.pf){
+      diveT = 32 + Math.random()*20; diveCount++; Snd.dive();
+      toast('🌊 파고든다! 손을 떼요','#ff8a8a');
+      if(navigator.vibrate && !reduceMotion) navigator.vibrate([0,18,40,18]);
+    }
+    var diving = diveT>0;
+    // 순간적인 긴장만 주고 진행도는 거의 안 깎는다(교착 방지)
+    var pullForce = f.pw * d.pull * (0.15 + struggle + (diving?0.32:0)) * 0.011;
+    if(diving){ prog -= 0.0004; fy += 0.0022; }
     // 릴: 누르면 장력↑ 진행↑, 떼면 장력↓
     if(pulling){ tension += 0.016*d.reel; prog += 0.0052*d.reel/(f.st); }
     else { tension -= 0.020; prog -= 0.0006; }
     tension += pullForce;
     if(tension<0) tension=0; if(prog<0) prog=0;
-    if(pulling && frame%7===0) Snd.reel();
+    if(pulling && frame%4===0) Snd.ratchet(prog);
     // 가운데(초록 구간)를 얼마나 잘 유지했나 — 착지 때 정확도 보너스로 환산
-    var zz=safeZone(); zoneFrames++;
-    if(tension>=zz[0] && tension<=zz[1]) inZone++;
+    if(!diving){ var zz=safeZone(); zoneFrames++;
+      if(tension>=zz[0] && tension<=zz[1]) inZone++; }
     // 끌어올린 만큼 실제로 얕아진다 → 깊이 숫자도 줄고 물도 밝아진다
     curDepth = targetDepth * (1 - Math.min(1, prog)*0.92);
     // 판정
@@ -787,17 +814,40 @@
         ctx.strokeStyle='#7dfaa8'; ctx.lineWidth=3; rr(gx-3,gy-3,gw+6,gh+6,9); ctx.stroke(); ctx.restore();
       }
       // 안내
-      ctx.fillStyle='rgba(220,240,255,0.85)'; ctx.font='800 14px sans-serif';
-      ctx.fillText(pulling?'🔴 감는 중 (떼면 풀림)':'⚪ 눌러서 감기', W/2, H*0.88);
+      if(diveT>0){
+        ctx.fillStyle='#ff6b6b'; ctx.font='800 17px sans-serif';
+        ctx.fillText('🌊 파고든다! 손을 떼고 버텨요', W/2, H*0.88);
+        // 화면 가장자리 붉은 경고
+        var wg=ctx.createRadialGradient(W/2,H/2,H*0.25,W/2,H/2,H*0.72);
+        wg.addColorStop(0,'rgba(255,60,60,0)'); wg.addColorStop(1,'rgba(255,50,50,0.20)');
+        ctx.fillStyle=wg; ctx.fillRect(0,0,W,H);
+      } else {
+        ctx.fillStyle='rgba(220,240,255,0.85)'; ctx.font='800 14px sans-serif';
+        ctx.fillText(pulling?'🔴 감는 중 (떼면 풀림)':'⚪ 눌러서 감기', W/2, H*0.88);
+      }
     }
     else if(state==='landed'){
       if(lastCatch){
-        var t=Math.min(1, lastCatch.t/16);
-        drawFishBig(lastCatch.f, W/2, H*0.5, Math.min(W*0.8, 260)*(0.7+t*0.3), t);
+        drawSplash();
+        var raw=lastCatch.t/26, t=Math.min(1, raw);
+        var ease=1-Math.pow(1-t,3);                       // 끌려 올라오는 가속감
+        var y = H*(lastCatch.fromY + (0.42-lastCatch.fromY)*ease);
+        var sz = Math.min(W*0.8, 260) * (lastCatch.scale*0.9 + (1-lastCatch.scale*0.9)*ease);
+        // 올라오는 동안 줄이 아직 물려 있다
+        if(t<1){ ctx.strokeStyle='rgba(255,255,255,0.45)'; ctx.lineWidth=1.5;
+          ctx.beginPath(); ctx.moveTo(W/2,46); ctx.lineTo(W/2, y-sz*0.28); ctx.stroke(); }
+        ctx.save(); ctx.translate(W/2, y);
+        ctx.rotate(Math.sin(lastCatch.t*0.25)*0.10*(1-t));  // 마지막 몸부림
+        ctx.shadowColor='rgba(150,220,255,0.85)'; ctx.shadowBlur=18;
+        drawFishBig(lastCatch.f, 0, 0, sz, 1); ctx.shadowBlur=0;
+        drawFishBig(lastCatch.f, 0, 0, sz, 1);
+        ctx.restore();
+        if(t<1) return drawHUD();                          // 올라오는 중엔 텍스트 없이
         ctx.textAlign='center'; ctx.fillStyle='#eaf6ff'; ctx.font='800 22px sans-serif';
         ctx.fillText(lastCatch.f.n, W/2, H*0.72);
         ctx.fillStyle='#ffd36e'; ctx.font='800 16px sans-serif';
-        ctx.fillText(lastCatch.w.toFixed(1)+'kg · +'+lastCatch.pts+'점'+(lastCatch.isNew?'  ✨NEW':''), W/2, H*0.76);
+        var cw=Math.min(1,(lastCatch.t-26)/18), shownW=lastCatch.w*(cw<0?0:cw), shownP=Math.round(lastCatch.pts*(cw<0?0:cw));
+        ctx.fillText(shownW.toFixed(1)+'kg · +'+shownP+'점'+(lastCatch.isNew?'  ✨NEW':''), W/2, H*0.76);
         if(lastCatch.accBonus!==undefined){
           ctx.fillStyle= lastCatch.perfect ? '#7dfaa8' : 'rgba(210,235,255,0.75)';
           ctx.font='800 13px sans-serif';
