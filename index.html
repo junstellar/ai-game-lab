@@ -33,6 +33,43 @@
   .card .tags{ display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; align-items:center; }
   .card.soon{ opacity:.6; }
 
+  /* ── 구분선 + 가로로 긴 카드 ─────────────────────────────────
+     미니게임과 결이 다른 게임(3D 등)을 아래쪽에 따로 놓는다.
+     폭은 미니게임 카드 3개(=그리드 한 줄) 전체, 높이는 그 1/3. */
+  .divider{
+    display:flex; align-items:center; gap:14px;
+    margin:34px 0 18px; color:var(--muted); font-size:.78rem;
+    letter-spacing:.08em; white-space:nowrap;
+  }
+  .divider::before, .divider::after{ content:''; height:1px; background:var(--border); flex:1; }
+
+  .biggrid{ display:grid; gap:14px; margin:0 0 40px; }
+  .card-wide{
+    display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:18px;
+    min-height:78px; padding:14px 22px 14px 26px;
+    background:var(--panel); border:1px solid var(--border); border-radius:var(--radius);
+    position:relative; overflow:hidden; color:inherit;
+    transition:transform .12s ease, border-color .15s;
+  }
+  a.card-wide:hover{ transform:translateY(-3px); border-color:#3a4150; text-decoration:none; }
+  .card-wide.soon{ opacity:.6; }
+  .card-wide .accent-bar{ position:absolute; left:0; top:0; width:4px; height:100%; }
+  .card-wide .emoji{ font-size:2.1rem; line-height:1; }
+  .card-wide .body{ min-width:0; }             /* ellipsis 가 먹으려면 필요 */
+  .card-wide h2{ margin:0 0 3px; font-size:1.1rem; }
+  .card-wide p{
+    margin:0; color:var(--muted); font-size:.86rem;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .card-wide .tags{ display:flex; gap:6px; flex-shrink:0; align-items:center; }
+
+  /* 좁은 화면에서는 태그를 접고 설명을 두 줄까지 허용 */
+  @media (max-width:560px){
+    .card-wide{ grid-template-columns:auto 1fr; gap:14px; padding:14px 18px 14px 22px; }
+    .card-wide .tags{ display:none; }
+    .card-wide p{ white-space:normal; }
+  }
+
   footer{
     text-align:center; color:var(--muted); font-size:.85rem;
     padding:28px 20px 50px; border-top:1px solid var(--border);
@@ -48,6 +85,8 @@
 
   <main class="wrap">
     <div class="grid" id="grid"></div>
+    <div class="divider" id="bigDivider" hidden>3D 게임</div>
+    <div class="biggrid" id="biggrid"></div>
   </main>
 
   <footer>
@@ -58,24 +97,46 @@
   <script>
     (function(){
       var grid=document.getElementById('grid');
+      var big=document.getElementById('biggrid');
+      var divider=document.getElementById('bigDivider');
       var games=(window.GAMES||[]);
       if(!games.length){
         grid.innerHTML='<p class="muted">아직 게임이 없어요. 곧 추가됩니다!</p>';
         return;
       }
+
+      function tagsHtml(g, live){
+        return (g.tags||[]).map(function(t){ return '<span class="badge">'+t+'</span>'; }).join('')
+             + (live ? '' : '<span class="badge badge-soon">곧 공개</span>');
+      }
+      function shell(g, live, cls){
+        var el=document.createElement(live?'a':'div');
+        el.className=cls+(live?'':' soon');
+        if(live) el.href='./'+g.id+'/';
+        return el;
+      }
+
       games.forEach(function(g){
         var live = g.status==='live';
-        var el = document.createElement(live?'a':'div');
-        el.className='card'+(live?'':' soon');
-        if(live){ el.href='./'+g.id+'/'; }
-        var tags=(g.tags||[]).map(function(t){ return '<span class="badge">'+t+'</span>'; }).join('');
-        var soonBadge = live ? '' : '<span class="badge badge-soon">곧 공개</span>';
+        /* wide:true 인 게임은 아래쪽 별도 영역에 가로로 길게 놓는다 */
+        if(g.wide){
+          var w=shell(g, live, 'card-wide');
+          w.innerHTML=
+            '<div class="accent-bar" style="background:'+(g.accent||'var(--accent)')+'"></div>'+
+            '<div class="emoji">'+(g.emoji||'🎮')+'</div>'+
+            '<div class="body"><h2>'+g.title+'</h2><p>'+g.desc+'</p></div>'+
+            '<div class="tags">'+tagsHtml(g,live)+'</div>';
+          big.appendChild(w);
+          divider.hidden=false;
+          return;
+        }
+        var el=shell(g, live, 'card');
         el.innerHTML=
           '<div class="accent-bar" style="background:'+(g.accent||'var(--accent)')+'"></div>'+
           '<div class="emoji">'+(g.emoji||'🎮')+'</div>'+
           '<h2>'+g.title+'</h2>'+
           '<p>'+g.desc+'</p>'+
-          '<div class="tags">'+tags+' '+soonBadge+'</div>';
+          '<div class="tags">'+tagsHtml(g,live)+'</div>';
         grid.appendChild(el);
       });
     })();
