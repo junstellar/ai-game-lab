@@ -37,6 +37,12 @@ window.OD = window.OD || {};
 OD.St1 = (function () {
   'use strict';
 
+  /* 문구 한 곳 — I18N 이 없으면 키를 그대로 돌려주므로, 이 파일만 떼어 열어도
+     깨지지 않는다(단독 실행용 st1.html 이 있다). */
+  function T(k, v) {
+    return (window.OD && OD.I18N) ? OD.I18N.t(k, v) : k;
+  }
+
   /* ══════════════════════════════════════════════════════════════════════
      0. 수치 — STAGE1.md §2/§6 을 그대로 옮긴 곳. 여기만 고치면 밸런스가 바뀐다.
      ════════════════════════════════════════════════════════════════════ */
@@ -525,10 +531,11 @@ OD.St1 = (function () {
         '<div class="crew"><b>6</b><div class="pips"></div></div>' +
         '<div class="flock"><i></i><span>18</span></div>' +
       '</div>' +
-      '<div class="cue">지금!</div>' +
+      '<div class="cue">' + T('st1.cue') + '</div>' +
       '<div class="flash"><span></span><u></u></div>' +
-      '<div class="hint">스페이스 또는 화면을 눌러 내보낸다</div>' +
-      '<div class="end"><h2></h2><p></p><button type="button">다시</button></div>';
+      '<div class="hint">' + T('st1.hint') + '</div>' +
+      '<div class="end"><h2></h2><p></p><button type="button">' +
+        T('ui.retry') + '</button></div>';
     host.appendChild(el);
 
     var big = el.querySelector('.crew b'),
@@ -590,10 +597,10 @@ OD.St1 = (function () {
       },
       end: function (r) {
         if (!r) { end.className = 'end'; return; }
-        endH.textContent = r.perfect ? '여섯 모두 나왔다' :
-                           (r.escaped === 0 ? '아무도 나오지 못했다' : '동굴을 벗어났다');
-        endP.innerHTML = '빠져나간 부하 <b>' + r.escaped + '</b>명 · 붙잡힘 ' + r.caught +
-                         '명' + (r.trapped ? ' · 갇힘 ' + r.trapped + '명' : '');
+        endH.textContent = r.perfect ? T('st1.endAll') :
+                           (r.escaped === 0 ? T('st1.endNone') : T('st1.endSome'));
+        endP.innerHTML = T('st1.endLine', { out: r.escaped, caught: r.caught }) +
+                         (r.trapped ? T('st1.endTrapped', { trapped: r.trapped }) : '');
         end.className = 'end on';
       },
       dispose: function () { if (el.parentNode) el.parentNode.removeChild(el); }
@@ -1228,13 +1235,13 @@ OD.St1 = (function () {
     if (s.phase !== 'run') return 'idle';
     if (s.wall - s.lastPress < C.cooldown) return 'cooldown';
     s.lastPress = s.wall;
-    if (s.waiting <= 0) { blank(s, '남은 부하가 없다'); return 'nocrew'; }
+    if (s.waiting <= 0) { blank(s, T('st1.noCrew')); return 'nocrew'; }
     if (s.pending) return 'busy';
 
     var sh = activeSheep(s);
     // ★ 매달릴 양이 없다. 페널티는 없다 — 대신 왜 안 나갔는지가 화면에 뜬다.
     //    (없으면 "열심히 눌렀는데 안 나간다"가 규칙 탓인지 버그인지 알 수 없다)
-    if (!sh) { flinch(s); s.snd.tick(); blank(s, '아직 양이 없다'); return 'nosheep'; }
+    if (!sh) { flinch(s); s.snd.tick(); blank(s, T('st1.noSheep')); return 'nosheep'; }
 
     // 이 양은 여기서 소모된다 — 양 하나에 부하 하나
     sh.used = true;
@@ -1279,7 +1286,7 @@ OD.St1 = (function () {
       s.escaped++;
       markPip(s, rider.man, 'out');
       s.snd.good();
-      s.hud.flash('빠져나갔다', '#7ee0a8');
+      s.hud.flash(T('st1.escaped'), '#7ee0a8');
       // 첫 성공이 나오면 조작 안내는 할 일을 다 했다
       if (!s.gotOne) { s.gotOne = true; s.hud.hint(false); }
     } else {
@@ -1291,9 +1298,9 @@ OD.St1 = (function () {
       s.snatchOn = true; s.snatchT = 0;
       s.snd.bad();
       // ★ 왜 실패했는지 — 빗나간 쪽을 한 마디로. 아슬아슬해도 사람을 잃은 것이다.
-      var why = r.late ? '너무 늦었다' : '너무 일렀다';
-      if (r.near) { s.snd.graze(); s.hud.flash('아슬아슬하게 놓쳤다', '#ff9a6a', why); }
-      else s.hud.flash('붙잡혔다', '#e2705f', why);
+      var why = r.late ? T('st1.late') : T('st1.early');
+      if (r.near) { s.snd.graze(); s.hud.flash(T('st1.grazed'), '#ff9a6a', why); }
+      else s.hud.flash(T('st1.caught'), '#e2705f', why);
     }
     rider.life = 0;
     s.pending = null;

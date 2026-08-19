@@ -36,6 +36,8 @@ var OD = window.OD || (window.OD = {});
 OD.UI = (function () {
   'use strict';
 
+  function T(k, v) { return (window.OD && OD.I18N) ? OD.I18N.t(k, v) : k; }
+
   var ACC = '#c08a3e';
   var root = null, elHud = null, elCue = null, elScrim = null, elCard = null, elFlash = null;
   var hooks = {}, cueTimer = 0, openedAt = 0, cur = null, keyHandler = null;
@@ -194,12 +196,12 @@ OD.UI = (function () {
     elHud = el('div', 'od-hud',
       '<div class="od-crew">' +
         '<div class="od-crew-row"><span class="od-crew-n">6</span>' +
-        '<span class="od-cap">부하</span></div>' +
+        '<span class="od-cap">' + T('ui.crew') + '</span></div>' +
         '<div class="od-pips"></div>' +
       '</div>' +
       '<div class="od-flock">' +
         '<div class="od-flock-row">' + sheepSVG('') + '<span class="od-flock-n">0</span></div>' +
-        '<div class="od-next"><span class="od-cap">다음</span>' +
+        '<div class="od-next"><span class="od-cap">' + T('ui.upcoming') + '</span>' +
           '<div class="od-next-box none">' +
             sheepSVG('od-ghost') + sheepSVG('od-solid') +
           '</div>' +
@@ -309,11 +311,12 @@ OD.UI = (function () {
 
     var hasAlt = !!o.onAlt;
     html += '<div class="od-btns">';
-    if (hasAlt) html += '<button class="od-btn" data-a="alt">' + esc(o.alt || '다시') + '</button>';
-    html += '<button class="od-btn pri" data-a="ok">' + esc(o.ok || '계속') + '</button>';
+    if (hasAlt) html += '<button class="od-btn" data-a="alt">' + esc(o.alt || T('ui.retry')) + '</button>';
+    html += '<button class="od-btn pri" data-a="ok">' + esc(o.ok || T('ui.next')) + '</button>';
     html += '</div>';
     /* 조작을 문장으로 설명하지 않는다 — 그 기기에서 되는 입력만 나열한다 */
-    if (!hasAlt) html += '<p class="od-hint">' + (TOUCH ? '아무 곳이나 탭' : '스페이스 · 클릭') + '</p>';
+    if (!hasAlt) html += '<p class="od-hint">' +
+      (TOUCH ? T('ui.tapAnywhere') : T('ui.spaceClick')) + '</p>';
     html += '</div>';
 
     elScrim = el('div', 'od-scrim', html);
@@ -359,7 +362,7 @@ OD.UI = (function () {
   function isCardOpen() { return !!elScrim; }
 
   function story(text, onOk) {
-    return card({ text: text, ok: '시작', onOk: onOk || hooks.onNext });
+    return card({ text: text, ok: T('ui.start'), onOk: onOk || hooks.onNext });
   }
 
   function result(o) {
@@ -368,9 +371,9 @@ OD.UI = (function () {
       text: o.text,
       fact: o.fact,
       tone: o.win ? 'win' : 'lose',
-      ok: o.ok || '계속',
+      ok: o.ok || T('ui.next'),
       onOk: o.onNext || hooks.onNext,
-      alt: o.alt || '다시',
+      alt: o.alt || T('ui.retry'),
       onAlt: o.onRetry || hooks.onRetry
     });
   }

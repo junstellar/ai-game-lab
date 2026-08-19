@@ -30,6 +30,8 @@ window.OD = window.OD || {};
 OD.Boot = (function () {
   'use strict';
 
+  function T(k, v) { return (window.OD && OD.I18N) ? OD.I18N.t(k, v) : k; }
+
   var Core = null, UI = null;
   var cvMain = null;            // 1편 캔버스 (#gl)
   var engine = null;            // 'st1' … 'st6' | null
@@ -236,16 +238,16 @@ OD.Boot = (function () {
   function nextNow() { cardKind = null; Core.nextStage(); }
 
   /* 이어지는 인원을 매번 마지막 줄에 적는다 — 안 보이면 이어진 게 아니다 */
-  function carry() { return '남은 부하 ' + Core.crew + '명 — 이 인원으로 항해는 이어진다.'; }
+  function carry() { return T('ui.carry', { n: Core.crew }); }
 
   function showCard(E, res, lost) {
     var o = cardOf(E, res, lost);
     cardKind = 'result';
     UI.card({
       text: o.text, fact: o.fact, tone: o.tone,
-      alt: o.again ? '다시' : null,
+      alt: o.again ? T('ui.retry') : null,
       onAlt: o.again ? guard(E.key + ':retry', retryNow) : null,
-      ok: o.go ? '계속' : '다시',
+      ok: o.go ? T('ui.next') : T('ui.retry'),
       onOk: o.go ? guard(E.key + ':next', nextNow) : guard(E.key + ':retry2', retryNow)
     });
   }
@@ -257,13 +259,13 @@ OD.Boot = (function () {
 
     if (E.key === 'st1') {
       return {
-        text: [r.perfect ? '여섯 모두 빠져나갔다.'
-                         : (r.escaped === 0 ? '아무도 빠져나가지 못했다.'
-                                            : r.escaped + '명이 양 배에 매달려 빠져나갔다.'),
-               '붙잡힘 ' + r.caught + '명' +
-                 (r.trapped ? ' · 동굴에 갇힘 ' + r.trapped + '명' : '') + '.',
+        text: [r.perfect ? T('st1.cardAll')
+                         : (r.escaped === 0 ? T('st1.cardNone')
+                                            : T('st1.cardSome', { n: r.escaped })),
+               T('st1.cardCaught', { n: r.caught }) +
+                 (r.trapped ? T('st1.cardTrapped', { n: r.trapped }) : '') + T('ui.period'),
                carry()],
-        fact: '오디세우스는 스스로 가장 큰 숫양의 배에 매달려 나왔습니다.',
+        fact: T('st1.fact'),
         tone: r.escaped > 0 ? 'win' : 'lose', go: true, again: true
       };
     }
@@ -513,6 +515,109 @@ OD.Boot = (function () {
   }
 
   /* ══════════════════════════════════════════════════════════════════════
+     언어 선택 — 화면 오른쪽 위. 공개 페이지에서도 보인다.
+     ─────────────────────────────────────────────────────────────────────
+     지금은 **1편만** 번역돼 있다. 다른 언어로 두고 2편에 들어가면 한국어가
+     나오므로, 한국어가 아닐 때는 그 사실을 한 줄 적어 둔다. 모르고 만나면
+     버그로 읽힌다 — 이 게임에서 이미 배운 것이다.
+     ════════════════════════════════════════════════════════════════════ */
+  var langBar = null;
+
+  function langCss() {
+    if (document.getElementById('od-lang-css')) return;
+    var st = document.createElement('style');
+    st.id = 'od-lang-css';
+    st.textContent = [
+      '.od-lang{position:fixed;right:10px;top:8px;z-index:78;display:flex;gap:3px;',
+      'align-items:center;padding:4px;border-radius:9px;background:rgba(8,12,18,.72);',
+      'border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(6px);',
+      'font-family:-apple-system,"Segoe UI","Malgun Gothic",system-ui,sans-serif;',
+      'pointer-events:auto;-webkit-user-select:none;user-select:none}',
+      '.od-lang button{all:unset;cursor:pointer;padding:3px 7px;border-radius:6px;',
+      'font-size:.68rem;font-weight:700;color:#9aa6b2;line-height:1.4}',
+      '.od-lang button:hover{background:rgba(255,255,255,.14);color:#fff}',
+      '.od-lang button.on{background:#c08a3e;color:#12161c}',
+      '.od-partial{position:fixed;right:10px;top:40px;z-index:78;max-width:230px;',
+      'padding:6px 9px;border-radius:8px;background:rgba(8,12,18,.72);',
+      'border:1px solid rgba(255,255,255,.10);color:#93a0aa;font-size:.66rem;',
+      'line-height:1.5;pointer-events:none;',
+      'font-family:-apple-system,"Segoe UI",system-ui,sans-serif}',
+      '@media (max-width:560px){.od-lang{right:6px;top:6px}',
+      '.od-lang button{padding:2px 5px;font-size:.62rem}',
+      '.od-partial{display:none}}'
+    ].join('');
+    document.head.appendChild(st);
+  }
+
+  var PARTIAL = {
+    en: 'Episode 1 only is translated so far. Episodes 2–6 are still in Korean.',
+    ja: '今のところ1話のみ翻訳済みです。2〜6話はまだ韓国語です。',
+    zh: '目前只翻译了第 1 章。第 2〜6 章仍是韩语。'
+  };
+
+  function langSync() {
+    if (!langBar) return;
+    var L = OD.I18N.lang;
+    var bs = langBar.querySelectorAll('button');
+    for (var i = 0; i < bs.length; i++) {
+      bs[i].className = (bs[i].getAttribute('data-l') === L) ? 'on' : '';
+    }
+    var n = document.getElementById('od-partial');
+    if (PARTIAL[L]) {
+      if (!n) {
+        n = document.createElement('div');
+        n.id = 'od-partial'; n.className = 'od-partial';
+        document.body.appendChild(n);
+      }
+      n.textContent = PARTIAL[L];
+    } else if (n && n.parentNode) {
+      n.parentNode.removeChild(n);
+    }
+  }
+
+  function langMount() {
+    if (langBar || !OD.I18N) return;
+    langCss();
+    var el = document.createElement('div');
+    el.className = 'od-lang';
+    var h = [], LS = OD.I18N.LANGS, i;
+    var SHORT = { ko: '한국어', en: 'EN', ja: '日本語', zh: '中文' };
+    for (i = 0; i < LS.length; i++) {
+      h.push('<button type="button" data-l="' + LS[i] + '">' + SHORT[LS[i]] + '</button>');
+    }
+    el.innerHTML = h.join('');
+    el.addEventListener('click', function (ev) {
+      var b = ev.target.closest ? ev.target.closest('button') : null;
+      if (!b) return;
+      ev.preventDefault(); ev.stopPropagation();
+      if (OD.I18N.set(b.getAttribute('data-l')) === undefined) return;
+    }, false);
+    /* 이 막대에서 스페이스·클릭이 게임 입력으로 새면 안 된다 */
+    el.addEventListener('pointerdown', function (e) { e.stopPropagation(); }, false);
+    document.body.appendChild(el);
+    langBar = el;
+    langSync();
+  }
+
+  /* 언어가 바뀌면 화면을 다시 그린다 — HUD 는 만들 때 문구를 구워 넣기 때문에
+     지금 편을 다시 들어가는 것이 가장 확실하다(진행 중 판은 어차피 리셋된다). */
+  function langApply() {
+    langSync();
+    try {
+      if (Core && Core.current) {
+        cardKind = null;
+        if (UI && UI.closeCard) UI.closeCard();
+        var E = byKey[engine];
+        if (E && E.ready) { try { E.mod.dispose(); } catch (e) { } E.ready = false; E.layer = null; }
+        var host = uiHost();
+        var old = document.getElementById('od-' + (engine || '') + '-layer');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+        Core.start(Core.current.index);
+      }
+    } catch (e) { note('lang:apply', e); }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
      개발용 편 선택 바 — 상단에 1~6 을 띄우고 눌러서 바로 그 편으로 간다.
      ─────────────────────────────────────────────────────────────────────
      **공개된 블로그에서는 뜨지 않는다.** localhost·127.0.0.1·file: 에서만,
@@ -681,6 +786,8 @@ OD.Boot = (function () {
       booted = true;
       Core.begin();
       bootHide();
+      langMount();                // 언어 선택 (공개 페이지에서도 보인다)
+      OD.I18N.onChange(langApply);
       devMount();                 // 개발 중에만 뜨는 편 선택 바 (공개 페이지에선 안 뜬다)
       SHOT.ready = true;
       return true;
