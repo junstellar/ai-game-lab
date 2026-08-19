@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>오디세이아 — 여섯 편의 귀향 | AI 게임 랩</title>
+<meta name="description" content="키클롭스·바람 자루·세이렌·스킬라·헬리오스의 소·이타카의 활. 버튼 하나로 하는 여섯 편의 타이밍 액션. 잃은 부하는 다음 편으로 이어진다.">
+<meta name="theme-color" content="#0b0e13">
+<!-- 이 문서 자체도 캐시하지 않는다. 스크립트에는 ?v= 를 붙여 두었지만, 그 번호를
+     읽어 오는 index.html 이 캐시되면 아무 소용이 없다 — 실제로 옛 index.html 이
+     남아 옛 스크립트를 계속 물고 있었다. -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta property="og:title" content="오디세이아 — 여섯 편의 귀향">
+<meta property="og:description" content="스페이스바 또는 탭 하나. 600명으로 출항해 여섯 편을 지난다. 몇 명을 데려올 수 있을까.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="../shared.css">
+<style>
+  html,body{ height:100%; overflow:hidden; overscroll-behavior:none; }
+  body{ background:#0b0e13; -webkit-tap-highlight-color:transparent;
+        -webkit-user-select:none; user-select:none; touch-action:none; }
+  #app{ position:fixed; inset:0; touch-action:none; }
+  #gl{ display:block; width:100%; height:100%; touch-action:none; outline:none; }
+  /* ★ 탭은 반드시 캔버스에 닿아야 한다.
+     여기서 자식 전부를 pointer-events:auto 로 켜면 오버레이가 화면 전체를 먹어
+     아무것도 못 누르게 된다(이전 버전의 버그). 클릭 받을 것은 OD.UI 가 스스로 켠다. */
+  #ui-root{ position:absolute; inset:0; pointer-events:none;
+            padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+
+  /* ── 부팅 화면 (OD.UI 준비 전까지) ──────────────────────────── */
+  #boot{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+         justify-content:center; gap:18px; background:#0b0e13; z-index:60;
+         transition:opacity .4s ease; font-family:-apple-system,"Segoe UI","Malgun Gothic",sans-serif; }
+  #boot.gone{ opacity:0; pointer-events:none; }
+  #boot .mark{ font-size:2.1rem; font-weight:800; letter-spacing:-.02em; color:#e6e8ec; text-align:center; }
+  #boot .mark small{ display:block; font-size:.72rem; font-weight:600; letter-spacing:.28em;
+                     color:#7f8794; margin-top:6px; text-transform:uppercase; }
+  #boot .bar{ width:180px; height:3px; border-radius:2px; background:#20242e; overflow:hidden; }
+  #boot .bar i{ display:block; height:100%; width:0%; border-radius:2px;
+                background:linear-gradient(90deg,#7c5cff,#4f8cff); transition:width .25s ease; }
+  #boot .msg{ font-size:.78rem; color:#6f7683; min-height:1.2em; }
+  #boot .err{ color:#e5534b; font-size:.8rem; max-width:80%; text-align:center; line-height:1.6; }
+
+  /* 미지원 안내 */
+  #nogl{ display:none; position:absolute; inset:0; z-index:70; background:#0b0e13; color:#e6e8ec;
+         flex-direction:column; align-items:center; justify-content:center; gap:14px;
+         text-align:center; padding:24px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="gl"></canvas>
+  <div id="ui-root"></div>
+
+  <div id="boot">
+    <div class="mark">오디세이아<small>Odysseia</small></div>
+    <div class="bar"><i id="bootBar"></i></div>
+    <div class="msg" id="bootMsg">준비 중…</div>
+    <div class="err" id="bootErr"></div>
+  </div>
+
+  <div id="nogl">
+    <div style="font-size:2rem">⛵</div>
+    <p>이 브라우저에서는 3D(WebGL)를 사용할 수 없어요.<br>최신 크롬·사파리·엣지에서 열어주세요.</p>
+    <a class="btn" href="../">🎮 다른 게임 보기</a>
+  </div>
+</div>
+
+<!-- 여섯 편은 각자 자기 파일 하나가 통째로 소유한다(장면·규칙·게이지·결과).
+     st1~st6 은 90-boot.js 보다 **먼저** 와야 한다 — 보트가 부팅하며 OD.St1…OD.St6 을 집는다.
+     옛 추상판(10-view.js / 30-stages.js / lib-scene.js)은 어느 편도 쓰지 않아 지웠다.
+     항로(6편의 순서·제목)는 90-boot.js 가 st1~st6 모듈에서 직접 짠다. -->
+<!-- ?v= 는 캐시 무효화용이다. js 를 고치면 이 숫자를 올려라 —
+     안 올리면 브라우저가 옛 파일을 계속 쓴다(실제로 겪었다: 4편 HUD 를 고쳤는데
+     화면엔 며칠 전 빌드가 떴다. 서버가 no-store 를 보내도 이미 캐시된 건 안 지워진다). -->
+<script src="../shunting/vendor/three.min.js"></script>
+<script src="js/00-core.js?v=3"></script>
+<script src="js/20-ui.js?v=3"></script>
+<script src="js/st1-cyclops.js?v=3"></script>
+<script src="js/st2-windbag.js?v=3"></script>
+<script src="js/st3-sirens.js?v=3"></script>
+<script src="js/st4-scylla.js?v=3"></script>
+<script src="js/st5-cattle.js?v=3"></script>
+<script src="js/st6-bow.js?v=3"></script>
+<script src="js/90-boot.js?v=3"></script>
+<script>
+  (function(){
+    // WebGL 지원 확인 — 없으면 안내 화면
+    var ok=false;
+    try{ var c=document.createElement('canvas');
+         ok=!!(c.getContext('webgl2')||c.getContext('webgl')); }catch(e){}
+    if(!ok){ document.getElementById('boot').style.display='none';
+             document.getElementById('nogl').style.display='flex'; return; }
+    var canvas=document.getElementById('gl');
+    var B=window.OD && OD.Boot;
+    var fn=B && (B.boot || B.start || B.init);
+    if(fn){ fn.call(B, canvas); }
+    else{ document.getElementById('bootErr').textContent='게임 모듈을 불러오지 못했습니다.'; }
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>오디세이아 2편 — 아이올로스의 바람 자루</title>
+<meta name="theme-color" content="#1b2742">
+<style>
+  html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none;background:#1b2742}
+  #wrap{position:fixed;inset:0}
+  #gl{display:block;width:100%;height:100%;touch-action:none;outline:none}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="gl"></canvas></div>
+
+<script src="../shunting/vendor/three.min.js"></script>
+<script src="js/st2-windbag.js"></script>
+<script>
+/* 2편 단독 실행 하네스 — OD.St2 가 장면·루프·입력·HUD 를 전부 소유한다. */
+(function () {
+  var canvas = document.getElementById('gl');
+  var errs = [];
+  window.addEventListener('error', function (e) { errs.push(String(e.message)); });
+
+  var manual = /[?&]manual=1/.test(location.search);
+  var ended = null;
+  var stage = null;
+  try {
+    stage = OD.St2.mount(canvas, null, {
+      hudHost: document.getElementById('wrap'),
+      loop: !manual, endPanel: true
+    });
+    OD.St2.onEnd = function (r) { ended = r; };
+  } catch (e) { errs.push(String(e && e.stack || e)); }
+
+  window.__SHOT = {
+    ready: !!stage && errs.length === 0,
+    manual: manual,
+    state: function () {
+      var st = OD.St2.state();
+      st.errors = errs.length;
+      st.errorList = errs.slice(0, 4);
+      st.ended = ended;
+      return st;
+    },
+    step: function (n, dt, hold) {
+      OD.St2.press(!!hold);
+      for (var i = 0; i < (n || 1); i++) OD.St2.update(dt || 1 / 60);
+      return OD.St2.state();
+    },
+    press: function (d) { return OD.St2.press(d); },
+    start: function () { OD.St2.start(); return OD.St2.state(); },
+    reset: function () { ended = null; OD.St2.reset(); return OD.St2.state(); },
+    /* 원하는 지점까지 세계를 민다. hold 는 boolean 또는 g=>boolean */
+    skipTo: function (sec, hold) { return OD.St2.skipTo(sec, hold); },
+    /* 조건이 참이 될 때까지 굴린 뒤 **그 자리에서 멈춘다** (연출 확인용) */
+    until: function (cond, maxSec, hold) {
+      var s = OD.St2, dt = 1 / 60, n = Math.round((maxSec || 30) / dt), i, g;
+      if (s.state().phase === 'ready') s.start();
+      for (i = 0; i < n; i++) {
+        g = s.state();
+        if (cond(g)) break;
+        s.press(typeof hold === 'function' ? !!hold(g) : !!hold);
+        s.update(dt, true);
+      }
+      s.update(0, false);
+      return s.state();
+    },
+    /* 진행도가 p 가 될 때까지 금색 띠를 노리며 실제로 플레이한다 */
+    playTo: function (p, maxSec, hold) {
+      var s = OD.St2, dt = 1 / 60, n = Math.round((maxSec || 240) / dt), i;
+      var st = s.state(), want = false, target = 0;
+      if (st.phase === 'ready') s.start();
+      for (i = 0; i < n; i++) {
+        st = s.state();
+        if (st.phase !== 'run' || st.prog >= p) break;
+        if (!want) {
+          if (st.fix <= 0 && st.bag > 0 && st.load <= 0.06) {
+            target = st.band[0] + (st.band[1] - st.band[0]) * 0.55 - st.up * 0.13;
+            want = true;
+          }
+        } else if (st.load >= target) want = false;
+        s.press(want);
+        s.update(dt, true);
+      }
+      s.press(false);
+      s.update(0, false);
+      return s.state();
+    },
+    /* 지금 이 순간을 얼려 스크린샷을 찍는다 */
+    freeze: function () {
+      var A = OD.St2;
+      if (!A.__u) { A.__u = A.update; A.update = function () { A.__u.call(A, 0, false); }; }
+      return true;
+    },
+    thaw: function () {
+      var A = OD.St2;
+      if (A.__u) { A.update = A.__u; A.__u = null; }
+      return true;
+    },
+    auto: function (p, sec, o) { ended = null; var r = OD.St2.auto(p, sec, true, o);
+                                 r.ended = ended; return r; },
+    sim: function (o) { return OD.St2.simulate(o); }
+  };
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>오디세이아 1편 — 키클롭스의 동굴</title>
+<meta name="theme-color" content="#07080b">
+<style>
+  html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none;background:#07080b}
+  #wrap{position:fixed;inset:0}
+  #gl{display:block;width:100%;height:100%;touch-action:none;outline:none}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="gl"></canvas></div>
+
+<script src="../shunting/vendor/three.min.js"></script>
+<script src="js/st1-cyclops.js"></script>
+<script>
+/* 1편 단독 실행 하네스 — OD.St1 이 장면·루프·입력·HUD 를 전부 소유한다. */
+(function () {
+  var canvas = document.getElementById('gl');
+  var errs = [];
+  window.addEventListener('error', function (e) { errs.push(String(e.message)); });
+
+  var manual = /[?&]manual=1/.test(location.search);
+  var ended = null;
+  var stage = null;
+  try {
+    stage = OD.St1.mount(canvas, {
+      hudHost: document.getElementById('wrap'),
+      loop: !manual, endPanel: true
+    });
+    OD.St1.onEnd = function (r) { ended = r; };
+  } catch (e) { errs.push(String(e && e.stack || e)); }
+
+  window.__SHOT = {
+    ready: !!stage && errs.length === 0,
+    manual: manual,
+    state: function () {
+      var st = OD.St1.state();
+      st.errors = errs.length;
+      st.errorList = errs.slice(0, 4);
+      st.ended = ended;
+      return st;
+    },
+    step: function (n, dt) {
+      for (var i = 0; i < (n || 1); i++) OD.St1.update(dt || 1 / 60);
+      return OD.St1.state();
+    },
+    /* 정해진 크기의 양만, '지금 누르면 안전한' 첫 순간에 누르는 완벽한 플레이어.
+       simulate() 와 같은 답이 나와야 모델과 실제 게임이 일치한다. */
+    play: function (kinds, maxSec) {
+      ended = null;
+      OD.St1.reset(); OD.St1.start();
+      var n = Math.round((maxSec || 95) * 60), i, st;
+      for (i = 0; i < n; i++) {
+        st = OD.St1.state();
+        if (st.phase !== 'run') break;
+        if (st.active && !st.pending && st.safeNow && kinds.indexOf(st.active.k) >= 0) OD.St1.press();
+        OD.St1.update(1 / 60);
+      }
+      var out = OD.St1.state();
+      out.ended = ended;
+      return out;
+    },
+    press: function () { return OD.St1.press(); },
+    start: function () { OD.St1.start(); return OD.St1.state(); },
+    reset: function () { OD.St1.reset(); return OD.St1.state(); },
+    pause: function () { OD.St1.pause(); return OD.St1.state(); },
+    until: function (cond, maxSec) {
+      var n = Math.round((maxSec || 8) * 60), i, st;
+      for (i = 0; i < n; i++) {
+        st = OD.St1.state();
+        if (cond === 'safe' && st.active && st.safeNow) return st;
+        if (cond === 'unsafe' && st.active && st.safeNow === false && !st.nearNow) return st;
+        if (cond === 'near' && st.active && st.safeNow === false && st.nearNow) return st;
+        if (cond === 'nosheep' && !st.active) return st;
+        OD.St1.update(1 / 60);
+      }
+      return OD.St1.state();
+    },
+    pressNow: function () {
+      var r = OD.St1.press();
+      var st = OD.St1.state();
+      return { r: r, esc: st.escaped, caught: st.caught, waiting: st.waiting, phase: st.phase };
+    },
+    /* 게임 시간을 원하는 지점으로 밀어 붙여 특정 장면을 찍는다 */
+    seek: function (t) {
+      OD.St1.start();
+      var i, n = Math.max(0, Math.round((t - OD.St1.state().gt) / 0.02));
+      for (i = 0; i < n; i++) OD.St1.update(0.02);
+      return OD.St1.state();
+    },
+    /* 지금 활성 양에 대해 '안전한 순간'까지 진행한 뒤 누른다 */
+    pressWhenSafe: function (limit) {
+      var i, n = Math.round((limit || 3) / 0.02);
+      for (i = 0; i < n; i++) {
+        var st = OD.St1.state();
+        if (st.active && st.safeNow) return OD.St1.press();
+        OD.St1.update(0.02);
+      }
+      return 'timeout';
+    },
+    sim: function (p, j, seed) { return OD.St1.simulate({ policy: p, jitter: j, seed: seed }); }
+  };
+})();
+</script>
+</body>
+</html>
