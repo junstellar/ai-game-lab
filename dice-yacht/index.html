@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>오늘의 주사위 — AI 게임 랩</title>
+<meta name="description" content="주사위 5개를 3번까지 다시 굴려 12개 족보를 채우는 게임. 하루 한 판, 운과 판단이 반씩. AI 코딩(바이브 코딩)으로 만든 무료 브라우저 게임.">
+<meta name="keywords" content="오늘의 주사위, 야추, 주사위 게임, 하루 한 판, 전략 게임, AI 코딩, 바이브 코딩, 무료 브라우저 게임">
+<link rel="stylesheet" href="../shared.css">
+<style>
+  .topbar{ display:flex; align-items:center; justify-content:space-between; padding:14px 18px; max-width:560px; margin:0 auto; }
+  .topbar .home{ font-size:.85rem; color:var(--muted); }
+  .iconbtn{ background:none; border:none; cursor:pointer; font-size:1.15rem; line-height:1; color:var(--muted); padding:4px; width:56px; text-align:right; }
+  .game{ max-width:460px; margin:0 auto; padding:2px 12px 40px; }
+  .stage{ position:relative; width:100%; border-radius:var(--radius); overflow:hidden; border:1px solid var(--border);
+          background:linear-gradient(180deg,#1b2136,#141827); box-shadow:0 12px 34px rgba(0,0,0,.3); padding:14px 12px 16px; }
+
+  .hud{ display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+  .hud .rnd{ font-size:.82rem; color:#9fb0cc; font-weight:700; }
+  .hud .tot{ font-size:1.5rem; font-weight:800; color:#eaf1ff; }
+  .hud .tot small{ font-size:.72rem; color:#9fb0cc; font-weight:700; margin-left:3px; }
+
+  .dicerow{ display:flex; justify-content:center; gap:9px; margin:6px 0 4px; }
+  .die{ width:54px; height:54px; border-radius:11px; background:#f2f4f8; border:2px solid #cdd5e2;
+        display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(3,1fr);
+        padding:7px; cursor:pointer; transition:transform .12s, box-shadow .12s; }
+  .die span{ width:9px; height:9px; border-radius:50%; background:#232a3a; align-self:center; justify-self:center; }
+  .die.held{ background:#ffe9a8; border-color:#e0a92b; box-shadow:0 0 0 3px rgba(224,169,43,.28); transform:translateY(3px); }
+  .die.rolling{ animation:sh .28s ease; }
+  @keyframes sh{ 0%{transform:translateY(0) rotate(0)} 30%{transform:translateY(-9px) rotate(-9deg)} 60%{transform:translateY(3px) rotate(7deg)} 100%{transform:translateY(0) rotate(0)} }
+  .die.empty{ background:#2a3149; border-color:#3b4463; }
+
+  .holdhint{ text-align:center; font-size:.72rem; color:#8fa2c2; min-height:16px; margin-bottom:8px; }
+  .rollbtn{ width:100%; margin-bottom:12px; }
+
+  .card{ display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .cell{ background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.10); border-radius:9px;
+         padding:7px 9px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;
+         transition:background .12s, border-color .12s; }
+  .cell .nm{ font-size:.78rem; color:#c3d2ea; font-weight:700; }
+  .cell .pv{ font-size:.86rem; font-weight:800; color:#6f83a5; min-width:26px; text-align:right; }
+  .cell.can{ border-color:rgba(120,220,160,.45); }
+  .cell.can .pv{ color:#7dfaa8; }
+  .cell.can:hover{ background:rgba(120,220,160,.13); }
+  .cell.zero .pv{ color:#7b5b6b; }
+  .cell.used{ background:rgba(255,255,255,.02); border-color:rgba(255,255,255,.06); cursor:default; }
+  .cell.used .nm{ color:#7386a3; } .cell.used .pv{ color:#eaf1ff; }
+  .bonus{ grid-column:1 / -1; text-align:center; font-size:.72rem; color:#9fb0cc; padding:3px 0 1px; }
+
+  .overlay{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:11px;
+            background:rgba(10,14,26,.93); backdrop-filter:blur(3px); text-align:center; padding:18px; overflow-y:auto; }
+  .overlay h2{ margin:0; font-size:1.45rem; } .overlay p{ margin:0; color:#cfe0f0; font-size:.87rem; line-height:1.6; }
+  .overlay .big{ font-size:2.9rem; font-weight:800; margin:2px 0; }
+  .hidden{ display:none !important; }
+  .mystats{ display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; max-width:300px; margin:2px auto 4px; }
+  .mystats .stat{ background:rgba(26,32,50,.9); border:1px solid var(--border); border-radius:10px; padding:8px; font-size:.78rem; color:var(--muted); }
+  .mystats .stat b{ display:block; color:var(--text); font-size:1.15rem; font-weight:800; margin-top:2px; }
+  .actions{ display:flex; flex-direction:column; gap:8px; width:100%; max-width:270px; }
+  .btnrow{ display:flex; gap:8px; } .btnrow .btn{ flex:1; }
+  .seg{ display:inline-flex; border:1px solid var(--border); border-radius:999px; overflow:hidden; background:rgba(20,26,42,.7); }
+  .seg button{ background:none; border:none; color:var(--muted); font-size:.8rem; font-weight:700; padding:6px 13px; cursor:pointer; }
+  .seg button.on{ background:var(--primary,#7c5cff); color:#fff; }
+  .helpline{ text-align:center; color:var(--muted); font-size:.8rem; margin-top:12px; line-height:1.6; }
+  .toastc{ position:absolute; top:44%; left:0; right:0; text-align:center; pointer-events:none; font-size:1.05rem; font-weight:800;
+           color:#ffd36e; opacity:0; transform:translateY(-4px); transition:opacity .14s, transform .14s; text-shadow:0 2px 8px rgba(0,0,0,.85); }
+  .toastc.show{ opacity:1; transform:translateY(0); }
+  /* 폐기된 시제품 안내 */
+  .archive{ max-width:560px; margin:0 auto 8px; padding:9px 14px; font-size:.76rem; line-height:1.65;
+            color:#ffc98a; background:rgba(224,140,43,.10); border:1px solid rgba(224,140,43,.32);
+            border-radius:10px; text-align:center; }
+  .archive a{ color:#ffd36e; font-weight:700; white-space:nowrap; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <a class="home" href="../">← 게임 랩</a>
+    <span class="badge">🎲 오늘의 주사위</span>
+    <button class="iconbtn" id="muteBtn" title="소리 켜기/끄기">🔊</button>
+  </div>
+
+  <div class="archive">
+    🗑️ <b>폐기된 시제품</b> — 게임 랩에 올리지 않은 게임입니다.
+    <a href="/p/ai-game-lab-build-10/">왜 버렸는지 읽기 →</a>
+  </div>
+
+  <main class="game">
+    <div class="stage" id="stage">
+      <div class="hud">
+        <span class="rnd" id="rnd">라운드 1 / 12</span>
+        <span class="tot"><span id="tot">0</span><small>점</small></span>
+      </div>
+      <div class="dicerow" id="dicerow"></div>
+      <div class="holdhint" id="holdhint"></div>
+      <button class="btn btn-primary rollbtn" id="rollBtn">주사위 굴리기</button>
+      <div class="card" id="card"></div>
+      <div class="toastc" id="toast"></div>
+
+      <div class="overlay" id="startOverlay">
+        <h2>🎲 오늘의 주사위</h2>
+        <p>주사위 5개를 굴려 <b>12개 족보</b>를 채웁니다.<br>
+           남길 주사위를 <b>탭해서 고정</b>하고 나머지만 다시 굴리세요.<br>
+           라운드마다 <b>다시 굴리기 2번</b>, 그다음 점수판에서 한 칸을 고릅니다.</p>
+        <p class="muted" style="font-size:.8rem">주사위는 <b>매번 새로 굴러갑니다</b>.<br>
+           운도 따라야 하고, 어디에 넣을지도 잘 골라야 해요.</p>
+        <div>
+          <span class="seg" id="segMode"><button data-v="daily" class="on">📅 오늘의 도전</button><button data-v="free">♾️ 연습</button></span>
+        </div>
+        <p class="muted" style="font-size:.75rem">오늘의 도전은 <b>하루 한 판</b> · 연습은 무제한(기록 안 됨)</p>
+        <p id="startBest" class="muted"></p>
+        <button class="btn btn-primary" id="startBtn">탭해서 시작</button>
+      </div>
+
+      <div class="overlay hidden" id="overOverlay">
+        <h2 id="overMsg">한 판 끝!</h2>
+        <div class="big" id="overScore">0점</div>
+        <p id="overBest" class="muted"></p>
+        <div class="mystats" id="overStats"></div>
+        <div class="actions">
+          <div class="btnrow">
+            <button class="btn btn-primary" id="shareBtn">📤 공유</button>
+            <button class="btn" id="cardBtn">🖼️ 이미지</button>
+          </div>
+          <button class="btn btn-primary" id="retryBtn">🔄 연습으로 한 판 더</button>
+          <a class="btn" href="../">🎮 다른 게임 보기</a>
+        </div>
+      </div>
+    </div>
+    <p class="helpline">주사위를 탭해 고정 · 다시 굴리기 2번 · 점수판에서 한 칸 선택</p>
+  </main>
+
+  <script src="../share.js"></script>
+  <script src="../stats.js"></script>
+  <script>
+  /* =========================================================
+     오늘의 주사위 — 야추(Yacht) 라이트
+     · 주사위는 플레이어마다 매번 새로 굴린다(운 요소를 남긴다).
+       모두에게 같은 눈을 주면 실력 순서가 고정돼 초보가 영영 못 이긴다.
+       공정성은 "같은 판"이 아니라 "모두 하루 한 판"에서 나온다.
+     · 12라운드, 라운드마다 굴리기 1 + 다시 굴리기 2
+     ========================================================= */
+  var GAME_ID='dice-yacht';
+  var ARCHIVE=true;   // 폐기 시제품 — 하루 한 판 제한 없이 눌러볼 수 있게
+  var CATS=[
+    {n:'1의 합'}, {n:'2의 합'}, {n:'3의 합'},
+    {n:'4의 합'}, {n:'5의 합'}, {n:'6의 합'},
+    {n:'초이스'}, {n:'포카드'}, {n:'풀하우스'},
+    {n:'S.스트레이트'}, {n:'L.스트레이트'}, {n:'야추'}
+  ];
+  var ROUNDS=12, MAXROLL=3;   // 첫 굴리기 + 다시 굴리기 2
+
+  var mode='daily', muted=false;
+  var dice, held, round, rollN, used, scores, total, state='ready';
+
+  function el(id){ return document.getElementById(id); }
+  var toastEl;
+
+  function pad2(n){ return (n<10?'0':'')+n; }
+  function todayKey(){ var d=new Date();
+    return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+  function rollDie(){ return 1+Math.floor(Math.random()*6); }
+
+  /* ---------- 사운드 ---------- */
+  var Snd=(function(){
+    var ac=null,master=null,vol=0.5;
+    function init(){ if(ac)return; try{ var AC=window.AudioContext||window.webkitAudioContext; ac=new AC();
+      master=ac.createGain(); master.gain.value=vol; master.connect(ac.destination);}catch(e){ac=null;} }
+    function tone(f0,f1,dur,type,g){ if(!ac)return; var t=ac.currentTime,o=ac.createOscillator(),gg=ac.createGain();
+      o.type=type||'sine'; o.frequency.setValueAtTime(f0,t); if(f1&&f1!==f0) o.frequency.exponentialRampToValueAtTime(Math.max(1,f1),t+dur);
+      gg.gain.setValueAtTime(0.0001,t); gg.gain.exponentialRampToValueAtTime(g||0.25,t+0.008);
+      gg.gain.exponentialRampToValueAtTime(0.0001,t+dur); o.connect(gg); gg.connect(master); o.start(t); o.stop(t+dur+0.03); }
+    function noise(dur,g,f0,f1){ if(!ac)return; var t=ac.currentTime,n=Math.floor(ac.sampleRate*dur);
+      var b=ac.createBuffer(1,n,ac.sampleRate),d=b.getChannelData(0);
+      for(var i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n);
+      var src=ac.createBufferSource(); src.buffer=b;
+      var bp=ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.setValueAtTime(f0||1400,t);
+      if(f1) bp.frequency.exponentialRampToValueAtTime(f1,t+dur);
+      var gg=ac.createGain(); gg.gain.setValueAtTime(g||0.25,t); gg.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+      src.connect(bp); bp.connect(gg); gg.connect(master); src.start(t); src.stop(t+dur+0.03); }
+    return { init:init, setVol:function(v){ vol=v; if(master) master.gain.value=v; },
+      resume:function(){ if(ac&&ac.state==='suspended') ac.resume(); },
+      roll:function(){ noise(0.32,0.26,900,2200); },
+      hold:function(){ tone(660,880,0.06,'triangle',0.14); },
+      pick:function(p){ var f=440+Math.min(400,p*6); tone(f,f*1.5,0.12,'triangle',0.2);
+        setTimeout(function(){ tone(f*1.5,f*1.9,0.1,'sine',0.14); },70); },
+      big:function(){ noise(0.4,0.2,600,3000); tone(300,1100,0.35,'sawtooth',0.18); },
+      over:function(){ tone(520,180,0.5,'sine',0.16); } };
+  })();
+
+  /* ---------- 점수 계산 ---------- */
+  function counts(d){ var c=[0,0,0,0,0,0,0]; for(var i=0;i<d.length;i++) c[d[i]]++; return c; }
+  function sumOf(d){ var s=0; for(var i=0;i<d.length;i++) s+=d[i]; return s; }
+  function hasRun(c,len){
+    var run=0;
+    for(var v=1;v<=6;v++){ if(c[v]>0){ run++; if(run>=len) return true; } else run=0; }
+    return false;
+  }
+  function scoreFor(cat,d){
+    if(!d || !d.length || !d[0]) return 0;
+    var c=counts(d), v;
+    if(cat<6) return c[cat+1]*(cat+1);
+    if(cat===6) return sumOf(d);                                            // 초이스
+    if(cat===7){ for(v=1;v<=6;v++) if(c[v]>=4) return sumOf(d); return 0; }  // 포카드
+    if(cat===8){ var has3=false,has2=false,five=false;
+      for(v=1;v<=6;v++){ if(c[v]===5) five=true; if(c[v]===3) has3=true; if(c[v]===2) has2=true; }
+      return (five || (has3&&has2)) ? 25 : 0; }                             // 풀하우스
+    if(cat===9)  return hasRun(c,4) ? 30 : 0;                               // S.스트레이트
+    if(cat===10) return hasRun(c,5) ? 40 : 0;                               // L.스트레이트
+    if(cat===11){ for(v=1;v<=6;v++) if(c[v]===5) return 50; return 0; }     // 야추
+    return 0;
+  }
+  function upperSum(){ var s=0; for(var i=0;i<6;i++) if(used[i]) s+=scores[i]; return s; }
+  function bonus(){ return upperSum()>=63 ? 35 : 0; }
+  function grandTotal(){ var s=0; for(var i=0;i<12;i++) if(used[i]) s+=scores[i]; return s+bonus(); }
+
+  /* ---------- 진행 ---------- */
+  function dailyDoneKey(){ return 'dd_done_'+todayKey(); }
+  function reset(){
+    dice=[0,0,0,0,0]; held=[false,false,false,false,false];
+    round=0; rollN=0; used=[]; scores=[];
+    for(var i=0;i<12;i++){ used.push(false); scores.push(0); }
+    total=0; state='playing';
+    render();
+  }
+  function toast(t,c){ toastEl.textContent=t; toastEl.style.color=c||'#ffd36e'; toastEl.classList.add('show');
+    clearTimeout(toast._t); toast._t=setTimeout(function(){ toastEl.classList.remove('show'); },900); }
+
+  function doRoll(){
+    if(state!=='playing' || rollN>=MAXROLL) return;
+    Snd.resume(); Snd.roll();
+    for(var s=0;s<5;s++){ if(rollN===0 || !held[s]) dice[s]=rollDie(); }
+    rollN++;
+    render(true);
+  }
+  function toggleHold(i){
+    if(state!=='playing' || rollN===0 || rollN>=MAXROLL) return;
+    held[i]=!held[i]; Snd.hold(); render();
+  }
+  function pick(cat){
+    if(state!=='playing' || rollN===0 || used[cat]) return;
+    var p=scoreFor(cat,dice);
+    used[cat]=true; scores[cat]=p;
+    if(p>=40){ Snd.big(); toast(CATS[cat].n+' '+p+'점! 🎉','#7dfaa8'); }
+    else if(p>0){ Snd.pick(p); }
+    else { Snd.pick(0); toast('0점으로 비웠습니다','#ff9c9c'); }
+    if(navigator.vibrate) navigator.vibrate(p>=40?[8,26,8]:10);
+    round++; rollN=0; held=[false,false,false,false,false]; dice=[0,0,0,0,0];
+    if(round>=ROUNDS){ finish(); return; }
+    render();
+  }
+  function finish(){
+    state='over'; total=grandTotal(); Snd.over();
+    var st;
+    if(mode==='daily' && !ARCHIVE){
+      try{ localStorage.setItem(dailyDoneKey(), String(total)); }catch(e){}
+      st=window.GameStats?GameStats.record(GAME_ID,{score:total}):{bestScore:total,plays:1,streak:1,totalScore:total};
+    } else {
+      st=window.GameStats?GameStats.get(GAME_ID):{bestScore:0,plays:0,streak:0,totalScore:0};
+    }
+    var isBest=(mode==='daily') && total>0 && total>=st.bestScore;
+    el('overMsg').textContent=(isBest?'최고 기록! 🎉':'한 판 끝!')+(mode==='daily'?' · 📅오늘의 도전':' · 연습');
+    el('overScore').textContent=total+'점';
+    el('overBest').textContent='상단 합계 '+upperSum()+'점'+(bonus()?' · 보너스 +35 획득!':' (63점 넘으면 +35)')
+      +(mode==='free'?'  ※ 연습은 기록에 남지 않아요':'');
+    el('overStats').innerHTML=
+      '<div class="stat">🏆 최고<b>'+st.bestScore+'점</b></div>'+
+      '<div class="stat">Σ 누적<b>'+st.totalScore+'점</b></div>'+
+      '<div class="stat">🔥 연속<b>'+st.streak+'일</b></div>'+
+      '<div class="stat">🎮 플레이<b>'+st.plays+'판</b></div>';
+    render();
+    setTimeout(function(){ el('overOverlay').classList.remove('hidden'); }, 500);
+  }
+
+  /* ---------- 렌더 ---------- */
+  var PIPS={1:[4],2:[0,8],3:[0,4,8],4:[0,2,6,8],5:[0,2,4,6,8],6:[0,2,3,5,6,8]};
+  function render(rolled){
+    el('rnd').textContent='라운드 '+Math.min(round+1,ROUNDS)+' / '+ROUNDS;
+    el('tot').textContent=grandTotal();
+
+    var row=el('dicerow'); row.innerHTML='';
+    for(var i=0;i<5;i++){
+      var d=document.createElement('div');
+      d.className='die'+(held[i]?' held':'')+(dice[i]?'':' empty')+(rolled&&!held[i]?' rolling':'');
+      if(dice[i]){ var set=PIPS[dice[i]];
+        for(var c=0;c<9;c++){ var sp=document.createElement('span');
+          if(set.indexOf(c)<0) sp.style.visibility='hidden'; d.appendChild(sp); } }
+      (function(idx){ d.onclick=function(){ toggleHold(idx); }; })(i);
+      row.appendChild(d);
+    }
+
+    var left=MAXROLL-rollN;
+    el('rollBtn').textContent = rollN===0 ? '주사위 굴리기' : (left>0 ? '다시 굴리기 ('+left+'회 남음)' : '점수판에서 칸을 고르세요');
+    el('rollBtn').disabled = (state!=='playing' || left<=0);
+    el('holdhint').textContent = (rollN>0 && left>0) ? '남길 주사위를 탭해서 고정하세요' : '';
+
+    var card=el('card'); card.innerHTML='';
+    for(var k=0;k<12;k++){
+      var cell=document.createElement('div');
+      var pv, cls='cell';
+      if(used[k]){ cls+=' used'; pv=scores[k]; }
+      else if(rollN>0){ pv=scoreFor(k,dice); cls+= pv>0?' can':' zero'; }
+      else { pv='–'; }
+      cell.className=cls;
+      cell.innerHTML='<span class="nm">'+CATS[k].n+'</span><span class="pv">'+pv+'</span>';
+      if(!used[k]){ (function(idx){ cell.onclick=function(){ pick(idx); }; })(k); }
+      card.appendChild(cell);
+      if(k===5){ var b=document.createElement('div'); b.className='bonus';
+        b.textContent='상단 합계 '+upperSum()+' / 63 '+(bonus()?'✅ 보너스 +35':'(넘으면 +35)');
+        card.appendChild(b); }
+    }
+  }
+
+  /* ---------- 결과 이미지 ---------- */
+  function makeCard(){
+    var c=document.createElement('canvas'); c.width=600; c.height=800; var x=c.getContext('2d');
+    var g=x.createLinearGradient(0,0,0,800); g.addColorStop(0,'#1b2136'); g.addColorStop(1,'#0b0e18');
+    x.fillStyle=g; x.fillRect(0,0,600,800);
+    x.fillStyle='#ffd36e'; x.font='800 40px sans-serif'; x.textAlign='center'; x.fillText('🎲 오늘의 주사위', 300, 92);
+    x.fillStyle='#fff'; x.font='800 130px sans-serif'; x.fillText(total, 300, 250);
+    x.fillStyle='#9fb0cc'; x.font='700 28px sans-serif'; x.fillText('점', 300, 292);
+    x.font='600 21px sans-serif';
+    for(var i=0;i<12;i++){
+      var col=i<6?0:1, rowi=i%6, px=70+col*270, py=370+rowi*44;
+      x.textAlign='left'; x.fillStyle='#8fa2c2'; x.fillText(CATS[i].n, px, py);
+      x.textAlign='right'; x.fillStyle= scores[i]>0?'#eaf1ff':'#5c6a85';
+      x.fillText(String(scores[i]), px+215, py);
+    }
+    x.textAlign='center'; x.fillStyle='#9fb0cc'; x.font='700 24px sans-serif';
+    x.fillText('상단 '+upperSum()+' / 63'+(bonus()?'  ·  보너스 +35':''), 300, 680);
+    x.fillStyle='#6d8ba0'; x.font='600 22px sans-serif';
+    x.fillText('junstellar.github.io/games/dice-yacht', 300, 758);
+    return c;
+  }
+  function shareCard(){
+    makeCard().toBlob(function(b){ if(!b) return;
+      var f=new File([b],'dice-yacht.png',{type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[f]})) navigator.share({files:[f],text:'🎲 오늘의 주사위 '+total+'점!'}).catch(function(){});
+      else { var a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='dice-yacht-'+total+'.png'; a.click();
+        setTimeout(function(){ URL.revokeObjectURL(a.href); },4000); }
+    },'image/png');
+  }
+
+  /* ---------- 입력 ---------- */
+  function start(){
+    Snd.init(); Snd.resume();
+    if(mode==='daily'){
+      var done=null; try{ done=localStorage.getItem(dailyDoneKey()); }catch(e){}
+      if(done!==null){
+        el('startOverlay').classList.add('hidden');
+        el('overMsg').textContent='오늘의 도전은 이미 끝났어요 📅';
+        el('overScore').textContent=done+'점';
+        el('overBest').textContent='내일 다시 도전할 수 있어요. 연습 모드는 무제한입니다.';
+        el('overStats').innerHTML='';
+        el('overOverlay').classList.remove('hidden');
+        return;
+      }
+    }
+    el('startOverlay').classList.add('hidden'); el('overOverlay').classList.add('hidden');
+    reset();
+  }
+
+  function wire(){
+    toastEl=el('toast');
+    el('rollBtn').onclick=doRoll;
+    el('startBtn').onclick=start;
+    el('retryBtn').onclick=function(){
+      mode='free';
+      var bs=el('segMode').getElementsByTagName('button');
+      bs[0].classList.remove('on'); bs[1].classList.add('on');
+      el('overOverlay').classList.add('hidden'); reset();
+      toast('연습 모드 — 기록에 남지 않아요','#9fd8ff');
+    };
+    el('cardBtn').onclick=shareCard;
+    el('shareBtn').onclick=function(){
+      var st=window.GameStats?GameStats.get(GAME_ID):{bestScore:total};
+      GameShare.share({ text:'🎲 오늘의 주사위 — '+total+'점! (최고 '+st.bestScore+'점)'+(mode==='daily'?' 📅'+todayKey():'')+
+        '\n너도 오늘 한 판 굴려봐 👇', url:'https://junstellar.github.io/games/dice-yacht/' });
+    };
+    var seg=el('segMode');
+    seg.addEventListener('click', function(e){ var b=e.target.closest('button'); if(!b) return;
+      var bs=seg.getElementsByTagName('button'); for(var i=0;i<bs.length;i++) bs[i].classList.remove('on');
+      b.classList.add('on'); mode=b.getAttribute('data-v'); });
+    el('muteBtn').onclick=function(){ muted=!muted; Snd.init(); Snd.setVol(muted?0:0.5); this.textContent=muted?'🔇':'🔊'; };
+    document.addEventListener('keydown', function(e){
+      if(e.code==='Space'){ e.preventDefault(); if(state==='playing') doRoll(); else start(); }
+      if(e.key>='1' && e.key<='5' && state==='playing') toggleHold(parseInt(e.key,10)-1);
+    });
+    if(window.GameStats){ var st=GameStats.get(GAME_ID);
+      if(st.bestScore>0) el('startBest').textContent='🏆 내 최고 기록: '+st.bestScore+'점'; }
+  }
+
+  wire();
+  reset(); state='ready'; render();
+  </script>
+</body>
+</html>
