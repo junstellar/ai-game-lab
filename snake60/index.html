@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>60초 스네이크 — AI 게임 랩</title>
+<meta name="description" content="벽과 내 꼬리 사이 한 칸 틈을 스치고 지나갈수록 점수가 커지는 60초 스네이크. 안전 운전은 점수가 안 납니다. 하루 한 판.">
+<meta name="keywords" content="60초 스네이크, 스네이크 게임, 아케이드, 하루 한 판, AI 코딩, 바이브 코딩, 무료 브라우저 게임">
+<link rel="stylesheet" href="../shared.css">
+<style>
+  .topbar{ display:flex; align-items:center; justify-content:space-between; padding:14px 18px; max-width:560px; margin:0 auto; }
+  .topbar .home{ font-size:.85rem; color:var(--muted); }
+  .tbr{ display:flex; gap:2px; }
+  .iconbtn{ background:none; border:none; cursor:pointer; font-size:1.1rem; line-height:1; color:var(--muted); padding:4px 6px; }
+  .game{ max-width:440px; margin:0 auto; padding:2px 12px 40px; }
+
+  .stage{ position:relative; width:100%; border-radius:var(--radius); overflow:hidden; border:1px solid var(--border);
+          background:linear-gradient(180deg,#141822,#0b0e14); box-shadow:0 12px 34px rgba(0,0,0,.35);
+          padding:12px 12px 14px; display:flex; flex-direction:column; align-items:center; }
+
+  /* ── HUD : 아케이드 캐비닛 느낌으로 등폭·자간 ── */
+  .hud{ width:100%; display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; }
+  .hstat{ font-family:"Consolas","SFMono-Regular",ui-monospace,monospace; letter-spacing:.06em; }
+  .hstat span{ display:block; font-size:.58rem; color:#5f7d8f; font-weight:700; }
+  .hstat b{ display:block; font-size:1.3rem; color:#d8f5e4; font-weight:800; line-height:1.15;
+            text-shadow:0 0 12px rgba(70,224,122,.35); }
+  .hstat.r{ text-align:right; }
+  .heat{ text-align:center; min-width:88px; }
+  .heat b{ font-size:1.05rem; color:#ffd36e; text-shadow:0 0 12px rgba(255,211,110,.45); transition:transform .1s; }
+  .heat.on b{ transform:scale(1.16); }
+
+  .tbar{ width:100%; height:5px; border-radius:3px; background:rgba(255,255,255,.07); overflow:hidden; margin-bottom:10px; }
+  .tfill{ height:100%; width:100%; border-radius:3px; background:linear-gradient(90deg,#46e07a,#8ef0a8); transition:background .3s; }
+  .tfill.warn{ background:linear-gradient(90deg,#ff8a5b,#ffd36e); }
+  .tfill.crit{ background:linear-gradient(90deg,#e5534b,#ff8a5b); animation:pulse .5s ease-in-out infinite; }
+  @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.45} }
+
+  canvas{ display:block; border-radius:8px; background:#080b11; touch-action:none;
+          box-shadow:0 0 0 1px rgba(70,224,122,.18), 0 0 26px rgba(70,224,122,.09) inset; }
+
+  .hint{ margin-top:9px; font-size:.72rem; color:#5f7d8f; text-align:center; line-height:1.5; min-height:16px; }
+
+  /* ── 오버레이 ── */
+  .overlay{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; gap:7px;
+            background:rgba(8,11,17,.95); backdrop-filter:blur(3px); text-align:center; padding:14px; overflow-y:auto; z-index:5; }
+  .overlay .btn{ padding:9px 10px; }
+  .overlay > *{ flex-shrink:0; }
+  .overlay > :first-child{ margin-top:auto; }
+  .overlay > :last-child{ margin-bottom:auto; }
+  .overlay h2{ margin:0; font-size:1.22rem; }
+  .overlay p{ margin:0; color:#cfe0f0; font-size:.84rem; line-height:1.6; }
+  .overlay .big{ font-size:2.2rem; font-weight:800; margin:0;
+                 font-family:"Consolas",ui-monospace,monospace; text-shadow:0 0 20px rgba(70,224,122,.4); }
+  .hidden{ display:none !important; }
+
+  /* 규칙 미니 도해 — 지나가는 칸의 옆이 몇 개 막혔나 */
+  .rulebox{ width:100%; max-width:290px; background:rgba(20,26,36,.92); border:1px solid var(--border);
+            border-radius:11px; padding:9px 11px; }
+  .rrow{ display:flex; align-items:center; gap:8px; padding:3px 0; }
+  .cells{ display:flex; gap:2px; }
+  .c{ width:15px; height:15px; border-radius:3px; }
+  .c.e{ background:rgba(255,255,255,.05); border:1px dashed rgba(255,255,255,.16); }
+  .c.b{ background:#2bb85c; }
+  .c.h{ background:#7dffa8; box-shadow:0 0 7px rgba(125,255,168,.6); }
+  .c.w{ background:#3a4250; border:1px solid #4d5766; }
+  .c.x{ background:#e5534b; }
+  .rrow .lbl{ flex:1; text-align:left; font-size:.72rem; color:#9fb0cc; }
+  .rrow .val{ font-size:.78rem; font-weight:800; color:#ffd36e; font-family:"Consolas",ui-monospace,monospace; }
+  .rrow .val.bad{ color:#ff8a8a; }
+
+  .mystats{ display:grid; grid-template-columns:1fr 1fr; gap:6px; width:100%; max-width:290px; }
+  .mystats .stat{ background:rgba(20,26,36,.92); border:1px solid var(--border); border-radius:10px; padding:5px 7px; font-size:.72rem; color:var(--muted); }
+  .mystats .stat b{ display:block; color:var(--text); font-size:1.02rem; font-weight:800; margin-top:1px;
+                    font-family:"Consolas",ui-monospace,monospace; }
+  .actions{ display:flex; flex-direction:column; gap:6px; width:100%; max-width:260px; }
+  .btnrow{ display:flex; gap:7px; } .btnrow .btn{ flex:1; }
+  .seg{ display:inline-flex; border:1px solid var(--border); border-radius:999px; overflow:hidden; background:rgba(16,22,32,.8); }
+  .seg button{ background:none; border:none; color:var(--muted); font-size:.78rem; font-weight:700; padding:6px 13px; cursor:pointer; }
+  .seg button.on{ background:linear-gradient(135deg,#2bb85c,#46e07a); color:#08210f; }
+  .linkish{ background:none; border:none; color:#5f7d8f; font-size:.75rem; cursor:pointer; text-decoration:underline; padding:2px; }
+  .helpline{ text-align:center; color:var(--muted); font-size:.78rem; margin-top:11px; line-height:1.6; }
+
+  .cd{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:4;
+       font-family:"Consolas",ui-monospace,monospace; font-size:4.6rem; font-weight:800; color:#7dffa8;
+       text-shadow:0 0 30px rgba(125,255,168,.6); }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <a class="home" href="../">← 게임 랩</a>
+    <span class="badge">🐍 60초 스네이크</span>
+    <span class="tbr">
+      <button class="iconbtn" id="helpBtn" title="규칙">📖</button>
+      <button class="iconbtn" id="muteBtn" title="소리 켜기/끄기">🔊</button>
+    </span>
+  </div>
+
+  <main class="game">
+    <div class="stage" id="stage">
+      <div class="hud">
+        <span class="hstat"><span>SCORE</span><b id="score">0</b></span>
+        <span class="hstat heat" id="heatBox"><span>HEAT</span><b id="heat">×1.0</b></span>
+        <span class="hstat r"><span>TIME</span><b id="time">60</b></span>
+      </div>
+      <div class="tbar"><div class="tfill" id="tfill"></div></div>
+
+      <canvas id="cv" width="384" height="384"></canvas>
+      <div class="hint" id="hint">방향키 · WASD · 화면 스와이프</div>
+
+      <div class="cd hidden" id="cd"></div>
+
+      <div class="overlay" id="startOverlay">
+        <h2>🐍 60초 스네이크</h2>
+        <p><b style="color:#ffd36e">내 몸을 스치듯 지나갈수록</b> 점수가 커집니다.<br>
+           트인 곳만 달리면 점수가 안 나요.</p>
+        <div class="rulebox">
+          <div class="rrow">
+            <span class="cells"><i class="c w"></i><i class="c h"></i><i class="c e"></i></span>
+            <span class="lbl">벽에만 붙어 달림</span><span class="val" style="color:#6f8296">0점</span>
+          </div>
+          <div class="rrow">
+            <span class="cells"><i class="c b"></i><i class="c h"></i><i class="c e"></i></span>
+            <span class="lbl">내 몸 옆을 지나감</span><span class="val">+1</span>
+          </div>
+          <div class="rrow">
+            <span class="cells"><i class="c b"></i><i class="c h"></i><i class="c w"></i></span>
+            <span class="lbl">몸과 벽 사이 한 칸 틈</span><span class="val">+15 ×HEAT</span>
+          </div>
+          <div class="rrow">
+            <span class="cells"><i class="c b"></i><i class="c x"></i><i class="c e"></i></span>
+            <span class="lbl">몸이나 벽에 닿음</span><span class="val bad">몸 초기화</span>
+          </div>
+        </div>
+        <p class="muted" style="font-size:.72rem;margin:0;max-width:300px">
+          벽은 안 움직이니 <b>혼자선 0점.</b> 위험한 건 <b style="color:#ffd36e">내 몸</b>입니다.<br>
+          부딪혀도 판은 안 끝나요 — <b>몸만 초기화, 60초는 계속</b>.</p>
+        <span class="seg" id="segMode"><button data-v="daily" class="on">📅 오늘의 도전</button><button data-v="free">♾️ 연습</button></span>
+        <p id="startBest" class="muted" style="margin:0;font-size:.78rem"></p>
+        <button class="btn btn-primary" id="startBtn">탭해서 시작</button>
+      </div>
+
+      <div class="overlay hidden" id="helpOverlay">
+        <h2>규칙</h2>
+        <div class="rulebox">
+          <div class="rrow"><span class="cells"><i class="c e"></i><i class="c h"></i><i class="c e"></i></span><span class="lbl">트인 곳</span><span class="val" style="color:#6f8296">0점</span></div>
+          <div class="rrow"><span class="cells"><i class="c w"></i><i class="c h"></i><i class="c e"></i></span><span class="lbl">벽에만 붙음</span><span class="val" style="color:#6f8296">0점</span></div>
+          <div class="rrow"><span class="cells"><i class="c b"></i><i class="c h"></i><i class="c e"></i></span><span class="lbl">내 몸 옆</span><span class="val">+1</span></div>
+          <div class="rrow"><span class="cells"><i class="c b"></i><i class="c h"></i><i class="c w"></i></span><span class="lbl">몸과 벽 사이 틈</span><span class="val">+15 ×HEAT</span></div>
+          <div class="rrow"><span class="cells"><i class="c b"></i><i class="c h"></i><i class="c b"></i></span><span class="lbl">몸과 몸 사이 틈</span><span class="val">+15 ×HEAT</span></div>
+        </div>
+        <p class="muted" style="font-size:.76rem;line-height:1.75;text-align:left;max-width:290px">
+          · 막힌 면에 <b>내 몸이 하나는 있어야</b> 점수가 붙습니다. 벽만으론 0점.<br>
+          · <b>몸을 통과하는 게 아닙니다.</b> 닿으면 몸이 초기화돼요.<br>
+          · <b>좁은 틈을 이어서 통과할수록 HEAT</b>가 올라 최대 ×3까지 곱해집니다.<br>
+            나란히 달리기(+1)로는 HEAT가 오르지 않습니다.<br>
+          · 먹이는 +30. <b>좁은 틈에서 먹으면 ×5 = +150</b>입니다.<br>
+          · 몸은 먹이 하나에 <b>4칸</b> 자랍니다. 길어질수록 틈이 많아져요.<br>
+          · 부딪혀도 판은 안 끝납니다 — <b>몸만 처음 길이로 돌아가고 1.2초 멈춤.</b><br>
+            60초는 계속 흐르니 <b>모두 같은 시간</b>으로 겨룹니다.</p>
+        <button class="btn btn-primary" id="helpClose">닫기</button>
+      </div>
+
+      <div class="overlay hidden" id="pauseOverlay">
+        <h2>⏸ 잠깐 멈춤</h2>
+        <p class="muted">화면을 벗어나 시계를 멈췄습니다.</p>
+        <button class="btn btn-primary" id="resumeBtn">탭해서 계속</button>
+      </div>
+
+      <div class="overlay hidden" id="overOverlay">
+        <h2 id="overMsg">60초 끝!</h2>
+        <div class="big" id="overScore">0</div>
+        <p id="overBest" class="muted" style="font-size:.8rem"></p>
+        <div class="mystats" id="overStats"></div>
+        <div class="actions">
+          <div class="btnrow">
+            <button class="btn btn-primary" id="shareBtn">📤 공유</button>
+            <button class="btn" id="cardBtn">🖼️ 이미지</button>
+          </div>
+          <button class="btn btn-primary" id="retryBtn">🔄 연습으로 한 판 더</button>
+          <a class="btn" href="../">🎮 다른 게임 보기</a>
+        </div>
+      </div>
+    </div>
+    <p class="helpline">내 몸을 <b>스칠수록</b> 점수가 커집니다 · 닿으면 몸이 초기화돼요</p>
+  </main>
+
+  <script src="../share.js"></script>
+  <script src="../stats.js"></script>
+  <script>
+  /* =========================================================
+     60초 스네이크 — 스침 보너스
+     · 재미의 정체: "벽과 내 꼬리 사이 한 칸 틈을 스치듯 지나가는 순간."
+       그래서 점수는 먹이가 아니라 **지나간 칸이 얼마나 위험했는가**로 난다.
+     · 충돌은 즉사가 아니라 몸 초기화 + 정지. 60초는 항상 다 흐른다
+       → 모두 같은 시간을 쓰므로 랭킹이 성립한다.
+     ========================================================= */
+  var GAME_ID='snake60';
+
+  var COLS=16, ROWS=16, DUR=60000;
+  var TICK0=125, TICKMIN=92;      // 몸이 길어질수록 조금씩 빨라진다
+  var GROW=4;                     // 먹이 하나에 자라는 칸
+  var PT_FOOD=30, PT_G1=1, PT_G2=15;   // 나란히 달리기는 소액 고정, 좁은 틈이 본체
+  var CRASH_MS=1200;
+  var HEAT_CAP=2.0, HEAT_RATE=6;  // heat = 1 + min(streak/RATE, CAP)
+
+  var mode='daily', muted=false;
+  var cv, ctx, CELL=24, PX=384;
+  var snake, dir, queue, food, occ, grow, streak, score, elapsed;
+  var state='ready', tickAt=0, tickMs=TICK0, lastFrame=0, crashUntil=0, raf=0;
+  var grewTick=false, prevTail=null, lastGraze=0, lastGrazeSides=null;
+  var nowMs=0;                    // 현재 프레임 시각 — 벽시계를 따로 읽으면 프레임과 어긋난다
+  var stat = { food:0, cells:0, graze1:0, graze2:0, crashes:0, maxLen:0, bestHeat:1 };
+  var parts=[], floats=[], shakeAmt=0, flash=0;
+
+  function el(id){ return document.getElementById(id); }
+  function idx(x,y){ return y*COLS+x; }
+  function pad2(n){ return (n<10?'0':'')+n; }
+  function todayKey(){ var d=new Date(); return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+  function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+
+  /* ---------- 사운드 ---------- */
+  var Snd=(function(){
+    var ac=null,master=null,vol=0.45;
+    function init(){ if(ac)return; try{ var AC=window.AudioContext||window.webkitAudioContext; ac=new AC();
+      master=ac.createGain(); master.gain.value=vol; master.connect(ac.destination);}catch(e){ac=null;} }
+    function tone(f0,f1,dur,type,g,delay){ if(!ac)return; var t=ac.currentTime+(delay||0),o=ac.createOscillator(),gg=ac.createGain();
+      o.type=type||'square'; o.frequency.setValueAtTime(f0,t);
+      if(f1&&f1!==f0) o.frequency.exponentialRampToValueAtTime(Math.max(1,f1),t+dur);
+      gg.gain.setValueAtTime(0.0001,t); gg.gain.exponentialRampToValueAtTime(g||0.2,t+0.006);
+      gg.gain.exponentialRampToValueAtTime(0.0001,t+dur); o.connect(gg); gg.connect(master); o.start(t); o.stop(t+dur+0.03); }
+    function noise(dur,g,f0,f1){ if(!ac)return; var t=ac.currentTime,n=Math.floor(ac.sampleRate*dur);
+      var b=ac.createBuffer(1,n,ac.sampleRate),d=b.getChannelData(0);
+      for(var i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n);
+      var src=ac.createBufferSource(); src.buffer=b;
+      var bp=ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.setValueAtTime(f0||1200,t);
+      if(f1) bp.frequency.exponentialRampToValueAtTime(f1,t+dur);
+      var gg=ac.createGain(); gg.gain.setValueAtTime(g||0.2,t); gg.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+      src.connect(bp); bp.connect(gg); gg.connect(master); src.start(t); src.stop(t+dur+0.03); }
+    return { init:init, setVol:function(v){ vol=v; if(master) master.gain.value=v; },
+      resume:function(){ if(ac&&ac.state==='suspended') ac.resume(); },
+      turn:function(){ tone(440,520,0.03,'square',0.05); },
+      eat:function(h){ var f=520*Math.pow(1.06,Math.min(h,12));
+        tone(f,f*1.6,0.07,'square',0.18); tone(f*1.6,f*2.1,0.06,'square',0.11,0.05); },
+      graze1:function(){ tone(880,940,0.025,'triangle',0.07); },
+      graze2:function(s){ var f=1180*Math.pow(1.045,Math.min(s,14));
+        tone(f,f*1.35,0.05,'triangle',0.16); },
+      crash:function(){ noise(0.4,0.32,1500,150); tone(260,55,0.45,'sawtooth',0.24); },
+      tickLow:function(){ tone(180,150,0.06,'square',0.10); },
+      over:function(){ [0,0.1,0.2].forEach(function(d,i){ tone(660/(i+1)*1.5,0,0.16,'square',0.16,d); }); } };
+  })();
+
+  /* ---------- 판 ---------- */
+  function blocked(x,y){
+    if(x<0||y<0||x>=COLS||y>=ROWS) return 1;          // 바깥 벽도 「막힌 면」이다
+    return occ[idx(x,y)] ? 1 : 0;
+  }
+  /* 진행 방향 기준 좌우 두 칸만 본다 (앞은 다음에 갈 곳, 뒤는 언제나 자기 목)
+     ★ 막힌 면에 **내 몸이 하나 이상** 있어야 점수가 붙는다.
+       벽은 움직이지 않아서, 벽만 인정하면 테두리를 뱅뱅 도는 게 무위험 최적해가 된다.
+       위험한 건 「움직이는 내 몸」 옆을 지나는 것이다. */
+  function grazeSides(x,y,d){
+    return d.x ? [{x:x,y:y-1},{x:x,y:y+1}] : [{x:x-1,y:y},{x:x+1,y:y}];
+  }
+  function grazeInfo(x,y,d){
+    var s=grazeSides(x,y,d), body=0, wall=0, hit=[];
+    for(var i=0;i<2;i++){
+      var c=s[i];
+      if(c.x<0||c.y<0||c.x>=COLS||c.y>=ROWS){ wall++; hit.push(c); }
+      else if(occ[idx(c.x,c.y)]){ body++; hit.push(c); }
+    }
+    var lvl = body>0 ? ((body+wall>=2) ? 2 : 1) : 0;
+    return { lvl:lvl, body:body, wall:wall, hit:hit };
+  }
+  function heat(){ return 1 + Math.min(streak/HEAT_RATE, HEAT_CAP); }
+
+  function placeFood(){
+    var free=[];
+    for(var y=0;y<ROWS;y++) for(var x=0;x<COLS;x++) if(!occ[idx(x,y)]) free.push(x+y*COLS);
+    if(!free.length){ food=null; return; }
+    var c=free[Math.floor(Math.random()*free.length)];
+    food={ x:c%COLS, y:Math.floor(c/COLS), born:performance.now() };
+  }
+  function spawnSnake(){
+    occ.fill(0);
+    var cy=Math.floor(ROWS/2), cx=Math.floor(COLS/2)-1;
+    snake=[];
+    for(var i=0;i<3;i++){ snake.push({x:cx-i,y:cy}); occ[idx(cx-i,cy)]=1; }
+    dir={x:1,y:0}; queue=[]; grow=0; streak=0; grewTick=false; prevTail=null; lastGraze=0;
+    placeFood();
+  }
+  function newRun(t){
+    occ=new Uint8Array(COLS*ROWS);
+    score=0; elapsed=0; parts=[]; floats=[]; shakeAmt=0; flash=0;
+    stat={ food:0, cells:0, graze1:0, graze2:0, crashes:0, maxLen:3, bestHeat:1 };
+    spawnSnake();
+    tickMs=TICK0; state='playing';
+    lastFrame=(t||performance.now()); tickAt=lastFrame; nowMs=lastFrame;
+  }
+
+  function turn(dx,dy){
+    if(state!=='playing') return;
+    var last = queue.length ? queue[queue.length-1] : dir;
+    if(dx===-last.x && dy===-last.y) return;    // 180도 금지
+    if(dx===last.x && dy===last.y) return;      // 같은 방향 중복 금지
+    if(queue.length<2){ queue.push({x:dx,y:dy}); Snd.turn(); }
+  }
+
+  function step(){
+    if(queue.length){
+      var d=queue.shift();
+      if(!(d.x===-dir.x && d.y===-dir.y)) dir=d;
+    }
+    var h=snake[0], nx=h.x+dir.x, ny=h.y+dir.y;
+    if(nx<0||ny<0||nx>=COLS||ny>=ROWS){ crash(nx,ny); return; }
+
+    var ate = !!(food && nx===food.x && ny===food.y);
+    var pending = grow + (ate?GROW:0);
+    var willGrow = pending>0;
+    var tail = snake[snake.length-1];
+    var intoTail = (!willGrow && nx===tail.x && ny===tail.y);
+    if(occ[idx(nx,ny)] && !intoTail){ crash(nx,ny); return; }
+
+    if(!willGrow){ snake.pop(); occ[idx(tail.x,tail.y)]=0; prevTail=tail; grewTick=false; }
+    else { grewTick=true; prevTail=null; }
+    grow = pending - (willGrow?1:0);
+
+    snake.unshift({x:nx,y:ny}); occ[idx(nx,ny)]=1;
+    stat.cells++; if(snake.length>stat.maxLen) stat.maxLen=snake.length;
+
+    /* ── 스침 판정 ── */
+    var gi = grazeInfo(nx,ny,dir), g = gi.lvl;
+    lastGraze = g; lastGrazeSides = g ? gi.hit : null;
+    /* HEAT 는 ×5(좁은 틈)에서만 오른다.
+       몸 옆을 나란히 달리는 건 안전한 자세라, 거기에 배수까지 주면 그게 최적해가 돼버린다. */
+    if(g===2){ streak++; stat.graze2++; }
+    else if(g===1){ stat.graze1++; }
+    else { streak = Math.max(0, streak-1); }
+    var hh = heat(); if(hh>stat.bestHeat) stat.bestHeat=hh;
+
+    var gained=0;
+    if(g===2){ gained += Math.round(PT_G2*hh); Snd.graze2(streak); sparkSides(nx,ny,'#ffd36e',7); shake(2.2); }
+    else if(g===1){ gained += PT_G1; Snd.graze1(); sparkSides(nx,ny,'#8ef0a8',2); }
+
+    if(ate){
+      var cm = (g===2?5:(g===1?2:1));
+      var fp = PT_FOOD*cm;
+      gained += fp;
+      stat.food++;
+      Snd.eat(stat.food);
+      burst(nx,ny,'#ff7b6b',16);
+      addFloat(nx,ny,'+'+fp+(cm>1?' ×'+cm:''), cm>1?'#ffd36e':'#8ef0a8', cm>1?1.35:1);
+      flash=Math.max(flash, cm>1?0.5:0.25);
+      if(cm>1) shake(5);
+      placeFood();
+      tickMs = Math.max(TICKMIN, TICK0 - snake.length*0.45);
+    } else if(g===2){
+      addFloat(nx,ny,'+'+Math.round(PT_G2*hh), '#ffd36e', 1);
+    }
+    score += gained;
+  }
+
+  function crash(nx,ny){
+    state='crash'; crashUntil = nowMs+CRASH_MS;
+    stat.crashes++; streak=0;
+    Snd.crash(); shake(15); flash=0.85;
+    var cx = clamp(nx,0,COLS-1), cy = clamp(ny,0,ROWS-1);
+    burst(cx,cy,'#ff5b5b',26);
+    for(var i=0;i<snake.length;i+=2) burst(snake[i].x, snake[i].y, '#46e07a', 2);
+    addFloat(cx,cy,'몸 초기화','#ff8a8a',1.2);
+  }
+  function respawn(){ spawnSnake(); tickMs=TICK0; state='playing'; tickAt=nowMs; }
+
+  /* ---------- 이펙트 ---------- */
+  function shake(a){ shakeAmt=Math.min(18, shakeAmt+a); }
+  function burst(cx,cy,color,n){
+    var px=(cx+0.5)*CELL, py=(cy+0.5)*CELL;
+    for(var i=0;i<n;i++){
+      var a=Math.random()*Math.PI*2, s=0.6+Math.random()*2.4;
+      parts.push({x:px,y:py,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,c:color,r:1+Math.random()*2});
+    }
+  }
+  function sparkSides(cx,cy,color,n){
+    if(!lastGrazeSides) return;
+    for(var k=0;k<lastGrazeSides.length;k++){
+      var s=lastGrazeSides[k];
+      if(!blocked(s.x,s.y)) continue;
+      var px=((cx+s.x)/2+0.5)*CELL, py=((cy+s.y)/2+0.5)*CELL;
+      for(var i=0;i<n;i++){
+        var a=Math.random()*Math.PI*2, sp=0.3+Math.random()*1.1;
+        parts.push({x:px,y:py,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:0.7,c:color,r:0.8+Math.random()*1.3});
+      }
+    }
+  }
+  function addFloat(cx,cy,txt,color,scale){
+    floats.push({ x:(cx+0.5)*CELL, y:(cy-0.35)*CELL, t:txt, c:color, life:1, s:scale||1 });
+  }
+
+  /* ---------- 렌더 ---------- */
+  var scanPat=null;
+  function makeScan(){
+    var c=document.createElement('canvas'); c.width=1; c.height=3;
+    var x=c.getContext('2d');
+    x.fillStyle='rgba(0,0,0,0.16)'; x.fillRect(0,0,1,1);
+    scanPat=ctx.createPattern(c,'repeat');
+  }
+  function fit(){
+    var host=cv.parentNode;
+    var avail=Math.min(host.clientWidth-24, 400);
+    CELL=Math.max(14, Math.floor(avail/COLS));
+    PX=CELL*COLS;
+    cv.style.width=PX+'px'; cv.style.height=PX+'px';
+    var dpr=Math.min(window.devicePixelRatio||1, 2);
+    cv.width=PX*dpr; cv.height=PX*dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    makeScan();
+  }
+  function cellPt(c){ return { x:(c.x+0.5)*CELL, y:(c.y+0.5)*CELL }; }
+  function lerpPt(a,b,t){ return { x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t }; }
+
+  function draw(now){
+    var t = state==='playing' ? clamp((now-tickAt)/tickMs,0,1) : (state==='crash'?1:0);
+    ctx.save();
+    if(shakeAmt>0.2){
+      ctx.translate((Math.random()-0.5)*shakeAmt, (Math.random()-0.5)*shakeAmt);
+      shakeAmt*=0.86;
+    }
+
+    /* 필드 */
+    ctx.fillStyle='#080b11'; ctx.fillRect(-20,-20,PX+40,PX+40);
+    ctx.strokeStyle='rgba(120,200,160,0.085)'; ctx.lineWidth=1;
+    ctx.beginPath();
+    for(var i=1;i<COLS;i++){ ctx.moveTo(i*CELL+.5,0); ctx.lineTo(i*CELL+.5,PX); }
+    for(var j=1;j<ROWS;j++){ ctx.moveTo(0,j*CELL+.5); ctx.lineTo(PX,j*CELL+.5); }
+    ctx.stroke();
+
+    /* 먹이 */
+    if(food){
+      var fp=cellPt(food), pulse=1+Math.sin(now/180)*0.10, r=CELL*0.32*pulse;
+      ctx.save();
+      ctx.shadowColor='rgba(255,91,91,.85)'; ctx.shadowBlur=CELL*0.7;
+      ctx.fillStyle='#ff5b5b';
+      ctx.beginPath(); ctx.arc(fp.x,fp.y,r,0,6.284); ctx.fill();
+      ctx.restore();
+      ctx.fillStyle='rgba(255,255,255,.75)';
+      ctx.beginPath(); ctx.arc(fp.x-r*0.3, fp.y-r*0.34, r*0.24, 0, 6.284); ctx.fill();
+    }
+
+    /* 뱀 — 칸 사이를 보간해서 미끄러지듯 움직인다 */
+    if(snake && snake.length){
+      var n=snake.length, pts=[], k;
+      var tailPt;
+      if(n>=2 && !grewTick && prevTail) tailPt=lerpPt(cellPt(snake[n-1]), cellPt(snake[n-2]), t);
+      else tailPt=cellPt(snake[n-1]);
+      pts.push(tailPt);
+      for(k=n-2;k>=1;k--) pts.push(cellPt(snake[k]));
+      var headPt = n>=2 ? lerpPt(cellPt(snake[1]), cellPt(snake[0]), t) : cellPt(snake[0]);
+      pts.push(headPt);
+
+      var w=CELL*0.68;
+      ctx.lineJoin='round'; ctx.lineCap='round';
+      /* 1) 글로우는 아주 옅게만. 진하면 나란히 놓인 몸끼리 뭉쳐서
+            이 게임의 핵심인 「몸 — 한 칸 복도 — 몸」 구조가 안 읽힌다. */
+      ctx.save();
+      ctx.globalAlpha=0.26;
+      ctx.shadowColor='rgba(70,224,122,.9)'; ctx.shadowBlur=CELL*0.5;
+      ctx.strokeStyle='#2bb85c'; ctx.lineWidth=w;
+      strokePts(pts); ctx.restore();
+      /* 2) 어두운 외곽선 — 몸과 몸을 갈라주는 건 결국 이 선이다 */
+      ctx.strokeStyle='#04150b'; ctx.lineWidth=w+6; strokePts(pts);
+      /* 3) 몸통 3겹 */
+      ctx.strokeStyle='#1d8b44'; ctx.lineWidth=w;      strokePts(pts);
+      ctx.strokeStyle='#46e07a'; ctx.lineWidth=w*0.54; strokePts(pts);
+      ctx.strokeStyle='rgba(205,255,224,.28)'; ctx.lineWidth=w*0.16; strokePts(pts);
+      /* 마디 구분선 — 한 칸 틈을 노리는 게임이라 몸이 몇 칸인지 셀 수 있어야 한다 */
+      ctx.strokeStyle='rgba(4,21,11,.55)'; ctx.lineWidth=2;
+      for(var sg=1; sg<pts.length; sg++){
+        var sa=pts[sg-1], sbp=pts[sg];
+        var svx=sbp.x-sa.x, svy=sbp.y-sa.y, sL=Math.sqrt(svx*svx+svy*svy);
+        if(sL<2) continue;
+        var smx=(sa.x+sbp.x)/2, smy=(sa.y+sbp.y)/2;
+        var spx=-svy/sL*w*0.48, spy=svx/sL*w*0.48;
+        ctx.beginPath(); ctx.moveTo(smx-spx,smy-spy); ctx.lineTo(smx+spx,smy+spy); ctx.stroke();
+      }
+
+      /* 머리 — 외곽선을 먼저 깔아 몸통과 확실히 떼어놓는다 */
+      var hd=headPt, hw=w*1.06;
+      ctx.fillStyle='#04150b';
+      roundRect(hd.x-hw*0.5-3, hd.y-hw*0.5-3, hw+6, hw+6, CELL*0.30); ctx.fill();
+      ctx.save();
+      ctx.shadowColor='rgba(125,255,168,.7)'; ctx.shadowBlur=CELL*0.4;
+      ctx.fillStyle='#8affb8';
+      roundRect(hd.x-hw*0.5, hd.y-hw*0.5, hw, hw, CELL*0.25); ctx.fill();
+      ctx.restore();
+      /* 눈 — 진행 방향을 본다 */
+      var ex=dir.x*hw*0.19, ey=dir.y*hw*0.19, ox=dir.x?0:hw*0.23, oy=dir.x?hw*0.23:0;
+      ctx.fillStyle='#04150b';
+      ctx.beginPath(); ctx.arc(hd.x+ex+ox, hd.y+ey+oy, hw*0.115, 0, 6.284); ctx.fill();
+      ctx.beginPath(); ctx.arc(hd.x+ex-ox, hd.y+ey-oy, hw*0.115, 0, 6.284); ctx.fill();
+
+      /* 스침 중이면 막힌 면을 그어준다 */
+      if(state==='playing' && lastGraze>0 && lastGrazeSides){
+        ctx.save();
+        ctx.strokeStyle = lastGraze===2 ? 'rgba(255,211,110,.95)' : 'rgba(142,240,168,.6)';
+        ctx.lineWidth = lastGraze===2 ? 4.5 : 3; ctx.lineCap='round';
+        ctx.shadowColor=ctx.strokeStyle; ctx.shadowBlur=12;
+        var hc=snake[0];
+        for(k=0;k<lastGrazeSides.length;k++){
+          var s=lastGrazeSides[k]; if(!blocked(s.x,s.y)) continue;
+          var mx=(hc.x+s.x)/2+0.5, my=(hc.y+s.y)/2+0.5;
+          ctx.beginPath();
+          if(s.x===hc.x){ ctx.moveTo((hc.x+0.12)*CELL, my*CELL); ctx.lineTo((hc.x+0.88)*CELL, my*CELL); }
+          else { ctx.moveTo(mx*CELL,(hc.y+0.12)*CELL); ctx.lineTo(mx*CELL,(hc.y+0.88)*CELL); }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
+    /* 파티클 */
+    for(var p=parts.length-1;p>=0;p--){
+      var q=parts[p];
+      q.x+=q.vx; q.y+=q.vy; q.vy+=0.045; q.life-=0.032;
+      if(q.life<=0){ parts.splice(p,1); continue; }
+      ctx.globalAlpha=Math.max(0,q.life); ctx.fillStyle=q.c;
+      ctx.beginPath(); ctx.arc(q.x,q.y,q.r,0,6.284); ctx.fill();
+    }
+    ctx.globalAlpha=1;
+
+    /* 떠오르는 점수 */
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    for(var f=floats.length-1;f>=0;f--){
+      var o=floats[f]; o.y-=0.55; o.life-=0.022;
+      if(o.life<=0){ floats.splice(f,1); continue; }
+      ctx.globalAlpha=Math.max(0,Math.min(1,o.life*1.5));
+      ctx.font='800 '+Math.round(CELL*0.62*o.s)+'px Consolas, ui-monospace, monospace';
+      ctx.lineWidth=3; ctx.strokeStyle='rgba(0,0,0,.75)';
+      ctx.strokeText(o.t,o.x,o.y); ctx.fillStyle=o.c; ctx.fillText(o.t,o.x,o.y);
+    }
+    ctx.globalAlpha=1;
+
+    /* 충돌 플래시 */
+    if(flash>0.01){ ctx.fillStyle='rgba(255,90,90,'+(flash*0.5)+')'; ctx.fillRect(0,0,PX,PX); flash*=0.86; }
+    ctx.restore();
+
+    /* CRT — 스캔라인 + 비네트 */
+    if(scanPat){ ctx.fillStyle=scanPat; ctx.fillRect(0,0,PX,PX); }
+    var vg=ctx.createRadialGradient(PX/2,PX/2,PX*0.3,PX/2,PX/2,PX*0.78);
+    vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.45)');
+    ctx.fillStyle=vg; ctx.fillRect(0,0,PX,PX);
+  }
+  function strokePts(pts){
+    ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+    for(var i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y);
+    ctx.stroke();
+  }
+  function roundRect(x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+  }
+
+  /* ---------- HUD ---------- */
+  var lastSec=-1;
+  function hud(){
+    el('score').textContent=score;
+    var hh=heat();
+    el('heat').textContent='×'+hh.toFixed(1);
+    el('heatBox').classList.toggle('on', hh>1.6);
+    var left=Math.max(0, DUR-elapsed), sec=Math.ceil(left/1000);
+    el('time').textContent=sec;
+    var f=el('tfill'); f.style.width=(left/DUR*100)+'%';
+    f.className='tfill'+(left<=10000?' crit':(left<=20000?' warn':''));
+    if(sec!==lastSec){
+      if(sec<=5 && sec>0 && state==='playing') Snd.tickLow();
+      lastSec=sec;
+    }
+  }
+
+  /* ---------- 루프 ---------- */
+  function frame(now){
+    nowMs=now;
+    var dt=Math.min(now-lastFrame, 100); lastFrame=now;
+    if(state==='playing'||state==='crash'){
+      elapsed+=dt;
+      if(elapsed>=DUR){ finish(); }
+    }
+    if(state==='crash' && now>=crashUntil) respawn();
+    if(state==='playing'){
+      /* 탭이 멈췄다 돌아오는 등으로 크게 밀리면, 밀린 만큼 따라잡지 않고 시각을 맞춘다.
+         안 그러면 복귀하자마자 여러 칸을 건너뛰어 억울하게 죽는다. */
+      if(now-tickAt > tickMs*4) tickAt = now;
+      var guard=0;
+      while(now-tickAt>=tickMs && guard++<3){ tickAt+=tickMs; step(); if(state!=='playing') break; }
+    }
+    draw(now); hud();
+    raf=requestAnimationFrame(frame);
+  }
+
+  function finish(){
+    if(state==='over') return;
+    state='over'; Snd.over();
+    var st;
+    if(mode==='daily'){
+      try{ localStorage.setItem('sn60_done_'+todayKey(), String(score)); }catch(e){}
+      st=window.GameStats?GameStats.record(GAME_ID,{score:score}):{bestScore:score,plays:1,streak:1,totalScore:score};
+    } else {
+      st=window.GameStats?GameStats.get(GAME_ID):{bestScore:0,plays:0,streak:0,totalScore:0};
+    }
+    var isBest=(mode==='daily') && score>0 && score>=st.bestScore;
+    el('overMsg').textContent=(isBest?'최고 기록! 🎉':'60초 끝!')+(mode==='daily'?' · 📅오늘의 도전':' · 연습');
+    el('overScore').textContent=score;
+    el('overBest').textContent='스침 '+(stat.graze1+stat.graze2)+'칸 · 좁은 틈 '+stat.graze2+' · HEAT ×'+stat.bestHeat.toFixed(1);
+    el('overStats').innerHTML=
+      '<div class="stat">🍎 먹이<b>'+stat.food+'개</b></div>'+
+      '<div class="stat">💥 부딪힘<b>'+stat.crashes+'번</b></div>'+
+      '<div class="stat">📏 최대 길이<b>'+stat.maxLen+'</b></div>'+
+      '<div class="stat">🏆 최고<b>'+st.bestScore+'</b></div>';
+    setTimeout(function(){ el('overOverlay').classList.remove('hidden'); }, 420);
+  }
+
+  /* ---------- 결과 이미지 ---------- */
+  function makeCard(){
+    var c=document.createElement('canvas'); c.width=600; c.height=700; var x=c.getContext('2d');
+    var g=x.createLinearGradient(0,0,0,700); g.addColorStop(0,'#141822'); g.addColorStop(1,'#080b11');
+    x.fillStyle=g; x.fillRect(0,0,600,700);
+    x.textAlign='center';
+    x.fillStyle='#46e07a'; x.font='800 40px sans-serif'; x.fillText('🐍 60초 스네이크', 300, 92);
+    x.fillStyle='#fff'; x.font='800 130px Consolas, monospace'; x.fillText(score, 300, 258);
+    x.fillStyle='#5f7d8f'; x.font='700 26px sans-serif'; x.fillText('점', 300, 300);
+    var rows=[['스친 칸', (stat.graze1+stat.graze2)+''],['좁은 틈 통과', stat.graze2+''],
+              ['먹이', stat.food+'개'],['부딪힘', stat.crashes+'번'],['최고 HEAT','×'+stat.bestHeat.toFixed(1)]];
+    x.font='600 24px sans-serif';
+    for(var i=0;i<rows.length;i++){
+      var yy=378+i*46;
+      x.textAlign='left';  x.fillStyle='#7d93a8'; x.fillText(rows[i][0], 130, yy);
+      x.textAlign='right'; x.fillStyle='#d8f5e4'; x.fillText(rows[i][1], 470, yy);
+    }
+    x.textAlign='center'; x.fillStyle='#4a6070'; x.font='600 22px sans-serif';
+    x.fillText('junstellar.github.io/games/snake60', 300, 655);
+    return c;
+  }
+  function shareCard(){
+    makeCard().toBlob(function(b){ if(!b) return;
+      var f=new File([b],'snake60.png',{type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[f]})) navigator.share({files:[f],text:'🐍 60초 스네이크 '+score+'점!'}).catch(function(){});
+      else { var a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='snake60-'+score+'.png'; a.click();
+        setTimeout(function(){ URL.revokeObjectURL(a.href); },4000); }
+    },'image/png');
+  }
+
+  /* ---------- 시작 / 입력 ---------- */
+  function countdown(cb){
+    var box=el('cd'), n=3;
+    box.classList.remove('hidden'); box.textContent=n;
+    Snd.tickLow();
+    var iv=setInterval(function(){
+      n--;
+      if(n>0){ box.textContent=n; Snd.tickLow(); }
+      else { box.textContent='GO'; Snd.eat(1);
+        setTimeout(function(){ box.classList.add('hidden'); },380);
+        clearInterval(iv); cb(); }
+    }, 620);
+  }
+  function start(){
+    Snd.init(); Snd.resume();
+    if(mode==='daily'){
+      var done=null; try{ done=localStorage.getItem('sn60_done_'+todayKey()); }catch(e){}
+      if(done!==null){
+        el('startOverlay').classList.add('hidden');
+        el('overMsg').textContent='오늘의 도전은 이미 끝났어요 📅';
+        el('overScore').textContent=done;
+        el('overBest').textContent='내일 다시 도전할 수 있어요. 연습 모드는 무제한입니다.';
+        el('overStats').innerHTML='';
+        el('overOverlay').classList.remove('hidden');
+        return;
+      }
+    }
+    el('startOverlay').classList.add('hidden'); el('overOverlay').classList.add('hidden');
+    state='ready'; score=0; elapsed=0; occ=new Uint8Array(COLS*ROWS); spawnSnake();
+    lastFrame=performance.now();
+    countdown(function(){ newRun(); });
+  }
+
+  var paused=false;
+  function pause(){
+    if(state!=='playing' && state!=='crash') return;
+    paused=true; el('pauseOverlay').classList.remove('hidden');
+    if(raf){ cancelAnimationFrame(raf); raf=0; }
+  }
+  function resume(){
+    if(!paused) return;
+    paused=false; el('pauseOverlay').classList.add('hidden');
+    lastFrame=performance.now(); tickAt=performance.now();
+    if(state==='crash') crashUntil=performance.now()+300;
+    if(!raf) raf=requestAnimationFrame(frame);
+  }
+
+  function wire(){
+    cv=el('cv'); ctx=cv.getContext('2d'); fit();
+    window.addEventListener('resize', fit);
+
+    el('startBtn').onclick=start;
+    el('resumeBtn').onclick=resume;
+    el('helpBtn').onclick=function(){ el('helpOverlay').classList.remove('hidden'); };
+    el('helpClose').onclick=function(){ el('helpOverlay').classList.add('hidden'); };
+    el('retryBtn').onclick=function(){
+      mode='free';
+      var bs=el('segMode').getElementsByTagName('button');
+      bs[0].classList.remove('on'); bs[1].classList.add('on');
+      el('overOverlay').classList.add('hidden'); start();
+    };
+    el('cardBtn').onclick=shareCard;
+    el('shareBtn').onclick=function(){
+      var st=window.GameStats?GameStats.get(GAME_ID):{bestScore:score};
+      GameShare.share({ text:'🐍 60초 스네이크 — '+score+'점! (좁은 틈 '+stat.graze2+'칸 통과)'+(mode==='daily'?' 📅'+todayKey():'')+
+        '\n내 꼬리에 바짝 붙어 달려야 점수가 나와요 👇', url:'https://junstellar.github.io/games/snake60/' });
+    };
+    var seg=el('segMode');
+    seg.addEventListener('click', function(e){ var b=e.target.closest('button'); if(!b) return;
+      var bs=seg.getElementsByTagName('button'); for(var i=0;i<bs.length;i++) bs[i].classList.remove('on');
+      b.classList.add('on'); mode=b.getAttribute('data-v'); });
+    el('muteBtn').onclick=function(){ muted=!muted; Snd.init(); Snd.setVol(muted?0:0.45); this.textContent=muted?'🔇':'🔊'; };
+
+    /* 키보드 */
+    var KEYS={ ArrowUp:[0,-1], ArrowDown:[0,1], ArrowLeft:[-1,0], ArrowRight:[1,0],
+               KeyW:[0,-1], KeyS:[0,1], KeyA:[-1,0], KeyD:[1,0] };
+    document.addEventListener('keydown', function(e){
+      var k=KEYS[e.code];
+      if(k){ e.preventDefault(); turn(k[0],k[1]); return; }
+      if(e.code==='Space'||e.code==='Enter'){
+        e.preventDefault();
+        if(paused) resume();
+        else if(state==='ready'||state==='over') start();
+      }
+    });
+
+    /* 스와이프 — 한 번 끌면서 여러 번 꺾을 수 있게 기준점을 계속 갱신 */
+    var ax=0, ay=0, tracking=false, TH=16;
+    function down(x,y){ ax=x; ay=y; tracking=true; }
+    function move(x,y){
+      if(!tracking) return;
+      var dx=x-ax, dy=y-ay;
+      if(Math.abs(dx)<TH && Math.abs(dy)<TH) return;
+      if(Math.abs(dx)>Math.abs(dy)) turn(dx>0?1:-1, 0); else turn(0, dy>0?1:-1);
+      ax=x; ay=y;
+    }
+    cv.addEventListener('touchstart', function(e){ e.preventDefault(); var t=e.touches[0]; down(t.clientX,t.clientY); }, {passive:false});
+    cv.addEventListener('touchmove',  function(e){ e.preventDefault(); var t=e.touches[0]; move(t.clientX,t.clientY); }, {passive:false});
+    cv.addEventListener('touchend',   function(e){ e.preventDefault(); tracking=false; }, {passive:false});
+    cv.addEventListener('mousedown', function(e){ down(e.clientX,e.clientY); });
+    window.addEventListener('mousemove', function(e){ move(e.clientX,e.clientY); });
+    window.addEventListener('mouseup', function(){ tracking=false; });
+
+    document.addEventListener('visibilitychange', function(){ if(document.hidden) pause(); });
+
+    if(window.GameStats){ var st=GameStats.get(GAME_ID);
+      if(st.bestScore>0) el('startBest').textContent='🏆 내 최고 기록: '+st.bestScore+'점'; }
+  }
+
+  wire();
+  occ=new Uint8Array(COLS*ROWS); score=0; elapsed=0; spawnSnake(); state='ready';
+  lastFrame=performance.now(); tickAt=lastFrame;
+  raf=requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
