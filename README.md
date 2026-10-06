@@ -10,6 +10,16 @@ No build step, no framework, no server: each game is self-contained static HTML/
 | | Game | What it is |
 |---|------|------------|
 | 🎨 | [AI 그림 맞히기 — Guess the AI Picture](https://junstellar.github.io/games/guess-image/) | Look at an AI-drawn picture and guess what it is. 3 tries per question (type → hint → multiple choice), scored, with a daily streak and one-tap emoji sharing. 30 images generated **locally on an RTX GPU** (ComfyUI + SDXL). |
+| 🟩 | [한글 단어 맞히기 — Hangul Word](hangul-word/) | A daily two-syllable Korean word puzzle. |
+| 🍰 | [디저트 탑 쌓기 — Dessert Tower](stack-tower/) | One-button dessert stacking and timing. |
+| 🕹️ | [낙하 회피 — Dodge](dodge/) | Dodge falling hazards and collect stars. |
+| 🗑️ | [종이 농구 — Paper Hoop](paper-hoop/) | Aim a paper ball, account for wind, and build combos. |
+| 🪐 | [우주 진화 — Space Merge](space-merge/) | Drop matching celestial bodies to evolve them. |
+| 🚂 | [조차장 — Shunting](shunting/) | A 3D rail shunting puzzle. |
+| 🎣 | [심해 낚시 — Deep Fishing](deep-fishing/) | Timing-based fishing with a 27-species collection. |
+| ⛵ | [오디세이아 — Odyssey](odyssey/) | Six one-button scenes from the journey home. |
+| 🐍 | [60초 스네이크 — Snake 60](snake60/) | Graze your own tail for points in a 60-second run. |
+| 💥 | [연쇄 폭발 — Chain Burst](https://junstellar.github.io/games/chain-burst/) | One tap per round, three rounds of moving chain reactions. Golden relays connect distant groups. |
 
 ## Add a new game (2 steps)
 
