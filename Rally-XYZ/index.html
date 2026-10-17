@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>방구차 — AI 게임 랩</title>
+<meta name="description" content="80년대 오락실 New Rally-X(방구차)를 브라우저로 옮겼습니다. 미로에서 깃발 10개를 모으고, 쫓아오는 빨간 차는 방구(연막)로 따돌리세요.">
+<meta name="keywords" content="방구차, 랠리X, New Rally-X, 고전 오락실 게임, 레트로 게임, 무료 브라우저 게임">
+<link rel="stylesheet" href="../shared.css">
+<style>
+  .topbar{ display:flex; align-items:center; justify-content:space-between; padding:14px 18px; max-width:560px; margin:0 auto; }
+  .topbar .home{ font-size:.85rem; color:var(--muted); }
+  .tbr{ display:flex; gap:2px; }
+  .iconbtn{ background:none; border:none; cursor:pointer; font-size:1.1rem; line-height:1; color:var(--muted); padding:4px 6px; }
+  .game{ max-width:520px; margin:0 auto; padding:2px 10px 40px; }
+
+  .stage{ position:relative; width:100%; border-radius:var(--radius); overflow:hidden; border:1px solid var(--border);
+          background:#05070b; box-shadow:0 12px 34px rgba(0,0,0,.35); }
+  canvas{ display:block; width:100%; height:auto; aspect-ratio:480/448; background:#05070b; touch-action:none; }
+
+  .hint{ margin-top:9px; font-size:.74rem; color:#5f7d8f; text-align:center; line-height:1.5; }
+
+  /* ── 모바일 조작부: 터치 기기에서만 ── */
+  .pad{ display:none; justify-content:space-between; align-items:center; margin-top:12px; padding:0 6px; user-select:none; -webkit-user-select:none; }
+  @media (pointer:coarse){ .pad{ display:flex; } .hint.desk{ display:none; } }
+  @media (pointer:fine){ .hint.touch{ display:none; } }
+  .dpad{ display:grid; grid-template-columns:repeat(3,54px); grid-template-rows:repeat(3,54px); gap:4px; }
+  .dpad button{ border:1px solid var(--border); border-radius:12px; background:var(--panel); color:#cfe0f0; font-size:1.15rem; touch-action:none; }
+  .dpad button.on{ background:#2a3550; border-color:#4f8cff; }
+  .dpad .u{ grid-column:2; grid-row:1; } .dpad .l{ grid-column:1; grid-row:2; }
+  .dpad .r{ grid-column:3; grid-row:2; } .dpad .d{ grid-column:2; grid-row:3; }
+  .smokebtn{ width:104px; height:104px; border-radius:50%; border:2px solid #6b7280; touch-action:none;
+             background:radial-gradient(circle at 40% 35%,#4b5563,#1f2937); color:#e5e7eb; font-size:2rem;
+             display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:1.1; }
+  .smokebtn span{ font-size:.8rem; font-weight:800; }
+  .smokebtn:active{ transform:scale(.95); }
+
+  /* ── 오버레이 ── */
+  .overlay{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; gap:8px;
+            background:rgba(5,7,11,.94); text-align:center; padding:14px; overflow-y:auto; z-index:5; }
+  .overlay > *{ flex-shrink:0; }
+  .overlay > :first-child{ margin-top:auto; }
+  .overlay > :last-child{ margin-bottom:auto; }
+  .overlay h2{ margin:0; font-size:1.35rem; }
+  .overlay p{ margin:0; color:#cfe0f0; font-size:.84rem; line-height:1.6; }
+  .overlay .btn{ padding:10px 12px; }
+  .overlay .big{ font-size:2.3rem; font-weight:800; margin:0; color:#ffd33d;
+                 font-family:"Consolas",ui-monospace,monospace; text-shadow:0 0 20px rgba(255,211,61,.35); }
+  .hidden{ display:none !important; }
+  .rules{ width:100%; max-width:320px; background:rgba(20,26,36,.92); border:1px solid var(--border);
+          border-radius:11px; padding:9px 12px; text-align:left; font-size:.76rem; color:#b8c4d6; line-height:1.7; }
+  .rules b{ color:#e6e8ec; }
+  .rules .y{ color:#ffd33d; } .rules .s{ color:#ff5fa2; } .rules .l{ color:#4fd1ff; }
+  .mystats{ display:grid; grid-template-columns:1fr 1fr; gap:6px; width:100%; max-width:290px; }
+  .mystats .stat{ background:rgba(20,26,36,.92); border:1px solid var(--border); border-radius:10px; padding:5px 7px; font-size:.72rem; color:var(--muted); }
+  .mystats .stat b{ display:block; color:var(--text); font-size:1.02rem; font-weight:800; margin-top:1px;
+                    font-family:"Consolas",ui-monospace,monospace; }
+  .actions{ display:flex; flex-direction:column; gap:6px; width:100%; max-width:260px; }
+</style>
+<script data-goatcounter="https://junstellar.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+<meta name="robots" content="noindex">
+</head>
+<body>
+  <div class="topbar">
+    <a class="home" href="../">← 게임 랩</a>
+    <span class="badge">🚗💨 방구차</span>
+    <span class="tbr">
+      <button class="iconbtn" id="helpBtn" title="규칙">📖</button>
+      <button class="iconbtn" id="muteBtn" title="소리 켜기/끄기">🔊</button>
+    </span>
+  </div>
+
+  <main class="game">
+    <div class="stage" id="stage">
+      <canvas id="cv"></canvas>
+
+      <div class="overlay" id="startOverlay">
+        <h2>🚗💨 방구차</h2>
+        <p>80년대 오락실 <b>New Rally-X</b>를 그대로 옮겼어요.</p>
+        <div class="rules">
+          🚩 <b class="y">깃발 10개</b>를 모으면 클리어 (100 → 1000점)<br>
+          💨 <b>방구</b>를 밟은 빨간 차는 빙글빙글 멈춰요<br>
+          ⛽ 연료가 바닥나면 느려져요 · 🪨 바위와 빨간 차는 아웃<br>
+          <b class="s">S</b> 이후 깃발 2배 · <b class="l">L</b> 남은 연료를 점수로 + 다시 가득
+        </div>
+        <p id="startBest" class="muted" style="font-size:.8rem"></p>
+        <button class="btn btn-primary" id="startBtn">시동 걸기</button>
+      </div>
+
+      <div class="overlay hidden" id="helpOverlay">
+        <h2>규칙</h2>
+        <div class="rules">
+          · ⌨️ 방향키·WASD 운전 · 스페이스(Z) 방구 · P 일시정지<br>
+          · 📱 패드나 화면 스와이프로 운전 · 화면 탭이나 💨 버튼으로 방구<br>
+          · 오른쪽 <b>레이더</b>에 깃발(노랑)과 적(빨강) 위치가 나옵니다.<br>
+          · 방향키를 미리 눌러 두면 <b>다음 갈림길에서</b> 꺾습니다.<br>
+          · 벽에 막히면 차가 알아서 꺾여요. 반대 방향은 바로 돌아섭니다.<br>
+          · 남은 연료는 라운드 클리어 때 보너스 점수가 됩니다.<br>
+          · 3·7·11… 라운드는 <b>챌린징 스테이지</b> — 연료가 떨어질 때까지 적이 안 움직여요.<br>
+          · 방구는 한 번에 연료 1.5를 씁니다. 연료가 0이면 못 뀌어요.<br>
+          · 빨간 차는 멈춰 있어도 닿으면 아웃입니다.<br>
+          · 죽어도 모은 깃발은 그대로 남아요.<br>
+          · <b>20,000점</b>에 차 한 대 추가, 이후 50,000점마다 추가.
+        </div>
+        <button class="btn btn-primary" id="helpClose">닫기</button>
+      </div>
+
+      <div class="overlay hidden" id="pauseOverlay">
+        <h2>⏸ 잠깐 멈춤</h2>
+        <button class="btn btn-primary" id="resumeBtn">계속 달리기</button>
+      </div>
+
+      <div class="overlay hidden" id="overOverlay">
+        <h2>GAME OVER</h2>
+        <div class="big" id="overScore">0</div>
+        <p id="overInfo" class="muted" style="font-size:.82rem"></p>
+        <div class="mystats" id="overStats"></div>
+        <div class="actions">
+          <button class="btn btn-primary" id="shareBtn">📤 결과 공유</button>
+          <button class="btn btn-primary" id="retryBtn">🔄 한 판 더</button>
+          <a class="btn" href="../">🎮 다른 게임 보기</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="pad" id="pad">
+      <div class="dpad" id="dpad">
+        <button class="u" data-d="0">▲</button>
+        <button class="l" data-d="3">◀</button>
+        <button class="r" data-d="1">▶</button>
+        <button class="d" data-d="2">▼</button>
+      </div>
+      <button class="smokebtn" id="smokeBtn">💨<span>방구</span></button>
+    </div>
+    <p class="hint desk">방향키·WASD 운전 · 스페이스(Z) 방구 · P 일시정지</p>
+    <p class="hint touch">화면 스와이프로도 운전 · 화면 탭하면 방구</p>
+  </main>
+
+  <script src="../share.js"></script>
+  <script src="../stats.js"></script>
+  <script>
+  /* =========================================================
+     방구차 — New Rally-X 이식
+     · 위아래좌우로 스크롤되는 미로, 깃발 10개 모으면 클리어.
+     · 빨간 차는 BFS 거리장으로 플레이어를 쫓고, 갈림길에서만 방향을 바꾸며
+       유턴하지 않는다(팩맨식). 연막을 밟으면 일정 시간 스핀.
+     · 맵은 3칸 격자(도로 1 + 블록 2)에서 구간을 무작위로 메워 만든다.
+       교차로마다 길이 2개 이상 남도록 해 막다른 길이 없다.
+     ========================================================= */
+  (function(){
+  'use strict';
+  var GAME_ID='Rally-XYZ', SHARE_URL='https://junstellar.github.io/games/Rally-XYZ/';
+  var HI_KEY='gamelab:rallyxyz:hi', MUTE_KEY='gamelab:rallyxyz:mute';
+
+  var COLS=37, ROWS=52;            // 3칸 격자: 12×17 블록
+  var T=32, VW=11, VH=14, PW=128;  // 타일 px, 보이는 칸 수, 오른쪽 패널 폭
+  var CW=VW*T+PW, CH=VH*T;
+  var DX=[0,1,0,-1], DY=[-1,0,1,0]; // 위 오른 아래 왼
+  var START={x:18,y:48};
+  var SPAWNS=[[0,51],[36,51],[0,0],[36,0],[6,51],[30,51],[18,0]];
+  var MAZE_SEEDS=[1981,7,4242,860];
+
+  var PSPEED=5.2, FUEL_MAX=100, FUEL_RATE=100/75, SMOKE_COST=1.5, SMOKE_LIFE=2.4, STUN=2.8;
+
+  var cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+  var dpr=Math.min(window.devicePixelRatio||1,2);
+  cv.width=CW*dpr; cv.height=CH*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  function $(id){ return document.getElementById(id); }
+  function mulberry(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; var t=Math.imul(a^a>>>15,1|a);
+    t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+  function shuffle(arr,r){ for(var i=arr.length-1;i>0;i--){ var j=Math.floor(r()*(i+1)), t=arr[i]; arr[i]=arr[j]; arr[j]=t; } return arr; }
+  function hash(x,y){ var h=(x*374761393+y*668265263)|0; h=(h^(h>>>13))*1274126177|0; return (h^(h>>>16))>>>0; }
+
+  /* ── 맵 ─────────────────────────────────────────────── */
+  var G=new Uint8Array(COLS*ROWS), ROCK=new Uint8Array(COLS*ROWS);
+  function I(x,y){ return y*COLS+x; }
+  function inb(x,y){ return x>=0&&y>=0&&x<COLS&&y<ROWS; }
+  function road(x,y){ return inb(x,y)&&G[I(x,y)]===1; }
+  function epass(x,y){ return road(x,y)&&!ROCK[I(x,y)]; }   // 적이 지나갈 수 있는 칸
+  function deg(x,y){ var n=0; for(var d=0;d<4;d++) if(road(x+DX[d],y+DY[d])) n++; return n; }
+  var Q=new Int32Array(COLS*ROWS);
+  function reach(pass){                     // START에서 닿는 칸 수
+    var seen=new Uint8Array(COLS*ROWS), h=0, t=0, n=0;
+    Q[t++]=I(START.x,START.y); seen[Q[0]]=1;
+    while(h<t){ var c=Q[h++], x=c%COLS, y=(c-x)/COLS; n++;
+      for(var d=0;d<4;d++){ var nx=x+DX[d], ny=y+DY[d];
+        if(pass(nx,ny)&&!seen[I(nx,ny)]){ seen[I(nx,ny)]=1; Q[t++]=I(nx,ny); } } }
+    return n;
+  }
+  function countWhere(pass){ var n=0; for(var y=0;y<ROWS;y++) for(var x=0;x<COLS;x++) if(pass(x,y)) n++; return n; }
+
+  function genMaze(seed){
+    var r=mulberry(seed), x, y, i, j;
+    for(y=0;y<ROWS;y++) for(x=0;x<COLS;x++) G[I(x,y)]=(x%3===0||y%3===0)?1:0;
+    var segs=[];
+    for(j=0;j<ROWS;j+=3) for(i=0;i+3<COLS;i+=3) segs.push([i+1,j,i+2,j,i,j,i+3,j]);
+    for(i=0;i<COLS;i+=3) for(j=0;j+3<ROWS;j+=3) segs.push([i,j+1,i,j+2,i,j,i,j+3]);
+    shuffle(segs,r);
+    var total=countWhere(road);
+    segs.forEach(function(s){
+      if(r()<0.42) return;
+      if((s[4]===START.x&&s[5]===START.y)||(s[6]===START.x&&s[7]===START.y)) return;
+      G[I(s[0],s[1])]=0; G[I(s[2],s[3])]=0;
+      if(deg(s[4],s[5])<2||deg(s[6],s[7])<2||reach(road)!==total-2){ G[I(s[0],s[1])]=1; G[I(s[2],s[3])]=1; }
+      else total-=2;
+    });
+  }
+
+  function manh(ax,ay,bx,by){ return Math.abs(ax-bx)+Math.abs(ay-by); }
+  function nearSpawn(x,y,dmin){
+    if(manh(x,y,START.x,START.y)<dmin) return true;
+    for(var k=0;k<SPAWNS.length;k++) if(manh(x,y,SPAWNS[k][0],SPAWNS[k][1])<3) return true;
+    return false;
+  }
+
+  var rocks=[], flags=[];
+  function placeRocks(n){
+    ROCK.fill(0); rocks=[];
+    var cands=[], x, y;
+    for(y=0;y<ROWS;y++) for(x=0;x<COLS;x++)
+      if(road(x,y)&&!(x%3===0&&y%3===0)&&!nearSpawn(x,y,6)) cands.push([x,y]);
+    shuffle(cands,Math.random);
+    var total=countWhere(road);
+    for(var k=0;k<cands.length&&rocks.length<n;k++){
+      var c=cands[k], ok=true;
+      for(var m=0;m<rocks.length;m++) if(manh(c[0],c[1],rocks[m].x,rocks[m].y)<5){ ok=false; break; }
+      if(!ok) continue;
+      ROCK[I(c[0],c[1])]=1;
+      if(reach(epass)!==total-rocks.length-1){ ROCK[I(c[0],c[1])]=0; continue; }
+      rocks.push({x:c[0],y:c[1]});
+    }
+  }
+  function placeFlags(){
+    var types=['n','n','n','n','n','n','n','n','n','n','S','L'];
+    var cands=[], x, y;
+    for(y=0;y<ROWS;y++) for(x=0;x<COLS;x++)
+      if(epass(x,y)&&!nearSpawn(x,y,7)) cands.push([x,y]);
+    shuffle(cands,Math.random);
+    for(var gap=6;gap>=1;gap--){
+      flags=[];
+      for(var k=0;k<cands.length&&flags.length<types.length;k++){
+        var c=cands[k], ok=true;
+        for(var m=0;m<flags.length;m++) if(manh(c[0],c[1],flags[m].x,flags[m].y)<gap){ ok=false; break; }
+        for(m=0;ok&&m<rocks.length;m++) if(manh(c[0],c[1],rocks[m].x,rocks[m].y)<2) ok=false;
+        if(ok) flags.push({x:c[0],y:c[1],type:types[flags.length],got:false});
+      }
+      if(flags.length===types.length) return;
+    }
+  }
+
+  /* 플레이어까지의 거리장 (적 추적용) */
+  var DIST=new Int16Array(COLS*ROWS), distKey=-1;
+  function computeDist(tx,ty){
+    DIST.fill(9999); var h=0, t=0, s=I(tx,ty);
+    DIST[s]=0; Q[t++]=s;
+    while(h<t){ var c=Q[h++], x=c%COLS, y=(c-x)/COLS;
+      for(var d=0;d<4;d++){ var nx=x+DX[d], ny=y+DY[d];
+        if(epass(nx,ny)&&DIST[I(nx,ny)]===9999){ DIST[I(nx,ny)]=DIST[c]+1; Q[t++]=I(nx,ny); } } }
+    distKey=s;
+  }
+
+  /* ── 오디오 ─────────────────────────────────────────── */
+  var AC=null, muted=false;
+  try{ muted=localStorage.getItem(MUTE_KEY)==='1'; }catch(e){}
+  function ac(){ if(!AC){ try{ AC=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+    if(AC&&AC.state==='suspended') AC.resume(); return AC; }
+  function tone(f,dur,type,vol,when,f2){
+    if(muted||!AC) return; var t0=AC.currentTime+(when||0);
+    var o=AC.createOscillator(), g=AC.createGain();
+    o.type=type||'square'; o.frequency.setValueAtTime(f,t0);
+    if(f2) o.frequency.exponentialRampToValueAtTime(f2,t0+dur);
+    g.gain.setValueAtTime(vol||0.08,t0); g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+    o.connect(g); g.connect(AC.destination); o.start(t0); o.stop(t0+dur+0.02);
+  }
+  function fart(){
+    if(muted||!AC) return; var t0=AC.currentTime;
+    var o=AC.createOscillator(), lfo=AC.createOscillator(), lg=AC.createGain(), f=AC.createBiquadFilter(), g=AC.createGain();
+    o.type='sawtooth'; o.frequency.setValueAtTime(95,t0); o.frequency.linearRampToValueAtTime(62,t0+0.28);
+    lfo.frequency.value=28; lg.gain.value=22; lfo.connect(lg); lg.connect(o.frequency);
+    f.type='lowpass'; f.frequency.value=520;
+    g.gain.setValueAtTime(0.0001,t0); g.gain.linearRampToValueAtTime(0.16,t0+0.03); g.gain.exponentialRampToValueAtTime(0.0001,t0+0.3);
+    o.connect(f); f.connect(g); g.connect(AC.destination);
+    o.start(t0); lfo.start(t0); o.stop(t0+0.32); lfo.stop(t0+0.32);
+  }
+  var SFX={
+    flag:function(){ tone(988,.07,'square',.07); tone(1319,.1,'square',.07,.07); },
+    special:function(){ [784,988,1175,1568].forEach(function(f,i){ tone(f,.09,'square',.07,i*.07); }); },
+    lucky:function(){ [523,659,784,1047,1319].forEach(function(f,i){ tone(f,.1,'triangle',.1,i*.06); }); },
+    stun:function(){ tone(660,.18,'triangle',.06,0,220); },
+    die:function(){ tone(700,.9,'sawtooth',.09,0,60); tone(180,.5,'square',.05,.3,40); },
+    tick:function(){ tone(1600,.025,'square',.03); },
+    low:function(){ tone(440,.09,'square',.05); },
+    extend:function(){ [1047,1319,1568,2093].forEach(function(f,i){ tone(f,.08,'square',.06,i*.08); }); },
+    clear:function(){ [523,659,784,659,784,1047].forEach(function(f,i){ tone(f,.12,'square',.07,i*.11); }); },
+    start:function(){ [392,523,659,784,659,784].forEach(function(f,i){ tone(f,.13,'square',.06,i*.13); }); }
+  };
+  function sfx(n){ if(SFX[n]) SFX[n](); }
+  function setMuteIcon(){ $('muteBtn').textContent=muted?'🔇':'🔊'; }
+  setMuteIcon();
+  $('muteBtn').onclick=function(){ muted=!muted; setMuteIcon(); try{ localStorage.setItem(MUTE_KEY,muted?'1':'0'); }catch(e){} };
+
+  /* ── 상태 ───────────────────────────────────────────── */
+  var state='title', paused=false, timer=0, introText=false;
+  var score=0, hi=0, lives=3, round=1, nextExtend=20000, totalFlags=0;
+  var fuel=FUEL_MAX, special=false, flagCount=0, challenge=false;
+  var P, enemies=[], smokes=[], popups=[], wish=0, deadT=0, clearT=0, tickAcc=0, lowT=0, blink=0;
+  try{ hi=parseInt(localStorage.getItem(HI_KEY),10)||0; }catch(e){}
+
+  function pos(e){ return { x:e.tx+DX[e.dir]*e.p, y:e.ty+DY[e.dir]*e.p }; }
+  function d2(a,b){ var dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy; }
+  function remaining(){ var n=0; flags.forEach(function(f){ if(f.type==='n'&&!f.got) n++; }); return n; }
+
+  function startGame(){
+    score=0; lives=3; round=1; nextExtend=20000; totalFlags=0;
+    startRound();
+  }
+  function startRound(){
+    genMaze(MAZE_SEEDS[(round-1)%MAZE_SEEDS.length]);
+    placeRocks(Math.min(2+round,9));
+    placeFlags();
+    fuel=FUEL_MAX; special=false; flagCount=0;
+    challenge=(round%4===3);
+    resetPositions();
+    state='ready'; timer=2.6; introText=true;
+    sfx('start');
+  }
+  function resetPositions(){
+    P={tx:START.x,ty:START.y,dir:0,p:0}; wish=0;
+    var n=Math.min(2+round,SPAWNS.length);
+    enemies=[];
+    for(var k=0;k<n;k++) enemies.push({tx:SPAWNS[k][0],ty:SPAWNS[k][1],dir:-1,p:0,
+      wait:challenge?0:0.8+k*1.4, stun:0, spin:0, immune:0});
+    smokes=[];
+    computeDist(START.x,START.y);
+  }
+
+  function addScore(v){
+    score+=v;
+    if(score>hi) hi=score;
+    if(score>=nextExtend){ lives++; nextExtend+=50000; sfx('extend'); var pp=pos(P); popup(pp.x,pp.y-1,'1UP','#7dffa8'); }
+  }
+  function popup(x,y,txt,col){ popups.push({x:x,y:y,txt:txt,col:col||'#fff',t:0}); }
+
+  /* ── 이동 (타일 중심에서만 방향 결정) ─────────────────── */
+  function advance(e,dist,decide){
+    for(var guard=0;dist>0&&guard<8;guard++){
+      if(e.p===0){ var nd=decide(e); if(nd<0) return; e.dir=nd; }
+      var rem=1-e.p;
+      if(dist>=rem){ e.tx+=DX[e.dir]; e.ty+=DY[e.dir]; e.p=0; dist-=rem; }
+      else { e.p+=dist; dist=0; }
+    }
+  }
+  function reverse(e){ e.tx+=DX[e.dir]; e.ty+=DY[e.dir]; e.dir=(e.dir+2)%4; e.p=1-e.p; }
+
+  function pDecide(e){
+    var x=e.tx, y=e.ty;
+    function open(d){ return road(x+DX[d],y+DY[d]); }
+    if(wish>=0&&open(wish)) return wish;
+    if(open(e.dir)) return e.dir;
+    var l=(e.dir+3)%4, r=(e.dir+1)%4, ol=open(l), or_=open(r);
+    if(ol&&or_) return Math.random()<0.5?l:r;
+    if(ol) return l; if(or_) return r;
+    return (e.dir+2)%4;
+  }
+  var wander=0.2;
+  function eDecide(e){
+    var x=e.tx, y=e.ty, rev=e.dir<0?-1:(e.dir+2)%4, opts=[];
+    for(var d=0;d<4;d++) if(d!==rev&&epass(x+DX[d],y+DY[d])) opts.push(d);
+    if(!opts.length) return rev>=0&&epass(x+DX[rev],y+DY[rev])?rev:-1;
+    if(opts.length>1&&Math.random()<wander) return opts[Math.floor(Math.random()*opts.length)];
+    var best=opts[0], bd=1e9;
+    for(var k=0;k<opts.length;k++){ var v=DIST[I(x+DX[opts[k]],y+DY[opts[k]])]+Math.random()*0.5;
+      if(v<bd){ bd=v; best=opts[k]; } }
+    return best;
+  }
+
+  function doSmoke(){
+    if(state!=='play'||paused||fuel<=0) return;
+    var pp=pos(P);
+    smokes.push({x:pp.x-DX[P.dir]*0.35,y:pp.y-DY[P.dir]*0.35,t:0});
+    fuel=Math.max(0,fuel-SMOKE_COST);
+    fart();
+  }
+
+  function die(){ state='dead'; timer=2.4; deadT=0; sfx('die'); }
+  function afterDeath(){
+    lives--;
+    if(lives<=0){ gameOver(); return; }
+    fuel=Math.max(fuel,25);
+    resetPositions(); state='ready'; timer=1.8; introText=false;
+  }
+  function roundClear(){ state='clear'; clearT=0; tickAcc=0; fuel=Math.floor(fuel); sfx('clear'); }
+
+  /* ── 업데이트 ───────────────────────────────────────── */
+  function update(dt){
+    blink+=dt;
+    for(var i=popups.length-1;i>=0;i--){ popups[i].t+=dt; if(popups[i].t>1.1) popups.splice(i,1); }
+    for(i=smokes.length-1;i>=0;i--){ smokes[i].t+=dt; if(smokes[i].t>SMOKE_LIFE) smokes.splice(i,1); }
+
+    if(state==='ready'){ timer-=dt; if(timer<=0) state='play'; return; }
+    if(state==='dead'){ deadT+=dt; timer-=dt; if(timer<=0) afterDeath(); return; }
+    if(state==='clear'){
+      clearT+=dt;
+      if(clearT>1.2){
+        tickAcc+=dt; var n=0;
+        while(tickAcc>0.018&&fuel>0){ tickAcc-=0.018; fuel=Math.max(0,fuel-1); addScore(10); n++; }
+        if(n) sfx('tick');
+        if(fuel<=0&&clearT>1.2){ timer=timer>0?timer:1.4; timer-=dt; if(timer<=0.01){ timer=0; round++; startRound(); } }
+      }
+      return;
+    }
+    if(state!=='play') return;
+
+    wander=Math.max(0.05,0.24-0.025*(round-1));
+    fuel=Math.max(0,fuel-FUEL_RATE*dt);
+    if(fuel>0&&fuel<20){ lowT-=dt; if(lowT<=0){ sfx('low'); lowT=1; } }
+
+    /* 플레이어 */
+    if(wish===(P.dir+2)%4&&P.p>0) reverse(P);
+    advance(P,(fuel>0?PSPEED:PSPEED*0.45)*dt,pDecide);
+    var pp=pos(P);
+
+    /* 깃발 */
+    for(i=0;i<flags.length;i++){ var f=flags[i];
+      if(f.got||d2(pp,f)>0.3) continue;
+      f.got=true; flagCount++;
+      var v=100*flagCount*(special?2:1);
+      if(f.type==='S'){ special=true; sfx('special'); popup(f.x,f.y-0.6,'×2','#ff5fa2'); }
+      else if(f.type==='L'){ var b=Math.floor(fuel)*10; v+=b; fuel=FUEL_MAX; sfx('lucky'); popup(f.x,f.y-1.2,'LUCKY!','#4fd1ff'); }
+      else { totalFlags++; sfx('flag'); }
+      addScore(v); popup(f.x,f.y,String(v),'#ffd33d');
+      if(f.type==='n'&&remaining()===0){ roundClear(); return; }
+    }
+
+    /* 적 */
+    var pt=P.p<0.5?I(P.tx,P.ty):I(P.tx+DX[P.dir],P.ty+DY[P.dir]);
+    if(pt!==distKey&&epass(pt%COLS,(pt-pt%COLS)/COLS)) computeDist(pt%COLS,(pt-pt%COLS)/COLS);
+    var espd=PSPEED*Math.min(0.97,0.8+0.03*(round-1));
+    var frozen=challenge&&fuel>0;
+    enemies.forEach(function(e){
+      if(e.immune>0) e.immune-=dt;
+      if(e.stun>0){ e.stun-=dt; e.spin+=dt*14; if(e.stun<=0) e.spin=0; return; }
+      if(frozen) return;
+      if(e.wait>0){ e.wait-=dt; return; }
+      advance(e,espd*dt,eDecide);
+    });
+
+    /* 연막 */
+    smokes.forEach(function(s){
+      enemies.forEach(function(e){
+        if(e.stun>0||e.immune>0) return;
+        if(d2(pos(e),s)<0.55){ e.stun=STUN; e.immune=STUN+0.5; sfx('stun'); }
+      });
+    });
+
+    /* 충돌 */
+    for(i=0;i<enemies.length;i++) if(d2(pos(enemies[i]),pp)<0.5){ die(); return; }
+    for(i=0;i<rocks.length;i++) if(d2(rocks[i],pp)<0.4){ die(); return; }
+  }
+
+  /* ── 그리기 ─────────────────────────────────────────── */
+  var ROAD='#2d313b';
+  function rr(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+  function drawWall(x,y,sx,sy){
+    ctx.fillStyle='#17633a'; ctx.fillRect(sx,sy,T,T);
+    var h=hash(x,y);
+    ctx.fillStyle='#1f7d48';
+    ctx.beginPath(); ctx.arc(sx+9+(h&7),sy+10+((h>>3)&7),7,0,6.283); ctx.fill();
+    ctx.beginPath(); ctx.arc(sx+23-((h>>6)&5),sy+22-((h>>9)&5),6,0,6.283); ctx.fill();
+    ctx.fillStyle='#2a9a5a';
+    ctx.beginPath(); ctx.arc(sx+7+(h&7),sy+8+((h>>3)&7),2.5,0,6.283); ctx.fill();
+    ctx.fillStyle='#c9d6a3';
+    if(road(x,y-1)) ctx.fillRect(sx,sy,T,3);
+    if(road(x,y+1)) ctx.fillRect(sx,sy+T-3,T,3);
+    if(road(x-1,y)) ctx.fillRect(sx,sy,3,T);
+    if(road(x+1,y)) ctx.fillRect(sx+T-3,sy,3,T);
+  }
+  function drawCar(x,y,ang,body,dark){
+    ctx.save(); ctx.translate(x,y); ctx.rotate(ang);
+    var w=18, h=25;
+    ctx.fillStyle='#0b0b0d';
+    ctx.fillRect(-w/2-3,-h/2+3,5,7); ctx.fillRect(w/2-2,-h/2+3,5,7);
+    ctx.fillRect(-w/2-3,h/2-10,5,7); ctx.fillRect(w/2-2,h/2-10,5,7);
+    ctx.fillStyle=body; rr(-w/2,-h/2,w,h,5); ctx.fill();
+    ctx.fillStyle=dark; ctx.fillRect(-2,-h/2+1,4,h-2);
+    ctx.fillStyle='rgba(205,235,255,.9)'; rr(-w/2+3,-h/2+5,w-6,5,2); ctx.fill();
+    ctx.fillStyle=dark; ctx.fillRect(-w/2-1,h/2-3,w+2,3);
+    ctx.restore();
+  }
+  function drawFlag(fx,fy,type,t){
+    var col=type==='S'?'#ff5fa2':type==='L'?'#4fd1ff':'#ffd33d';
+    var wv=Math.sin(t*6+fx)*1.5;
+    ctx.fillStyle='rgba(0,0,0,.35)'; ctx.beginPath(); ctx.ellipse(fx-5,fy+11,6,2,0,0,6.283); ctx.fill();
+    ctx.fillStyle='#e5e7eb'; ctx.fillRect(fx-7,fy-12,2,24);
+    ctx.fillStyle=col; ctx.beginPath(); ctx.moveTo(fx-5,fy-12); ctx.lineTo(fx+11,fy-6+wv); ctx.lineTo(fx-5,fy); ctx.closePath(); ctx.fill();
+    if(type!=='n'){ ctx.fillStyle='#111'; ctx.font='bold 10px Consolas,monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(type,fx+1,fy-6); }
+  }
+  function drawRock(rx,ry,x,y){
+    var h=hash(x*7,y*13);
+    ctx.fillStyle='#7c808a'; ctx.strokeStyle='#3b3e45'; ctx.lineWidth=2;
+    ctx.beginPath();
+    for(var k=0;k<8;k++){ var a=k/8*6.283, r=10+((h>>(k*3))&3); ctx.lineTo(rx+Math.cos(a)*r,ry+Math.sin(a)*r*0.85); }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle='#aeb2bb'; ctx.beginPath(); ctx.arc(rx-3,ry-4,3.5,0,6.283); ctx.fill();
+  }
+
+  function render(){
+    ctx.fillStyle='#05070b'; ctx.fillRect(0,0,CW,CH);
+    if(!P) return;
+    var pp=pos(P);
+    var ox=Math.round(VW*T/2-pp.x*T), oy=Math.round(CH/2-pp.y*T);
+    function SX(wx){ return ox+wx*T; } function SY(wy){ return oy+wy*T; }
+
+    ctx.save(); ctx.beginPath(); ctx.rect(0,0,VW*T,CH); ctx.clip();
+    ctx.fillStyle=ROAD; ctx.fillRect(0,0,VW*T,CH);
+    var x0=Math.floor(pp.x-VW/2)-1, x1=Math.ceil(pp.x+VW/2)+1, y0=Math.floor(pp.y-VH/2)-1, y1=Math.ceil(pp.y+VH/2)+1;
+    for(var y=y0;y<=y1;y++) for(var x=x0;x<=x1;x++) if(!road(x,y)) drawWall(x,y,SX(x-0.5),SY(y-0.5));
+
+    flags.forEach(function(f){ if(!f.got) drawFlag(SX(f.x),SY(f.y),f.type,blink); });
+    rocks.forEach(function(r){ drawRock(SX(r.x),SY(r.y),r.x,r.y); });
+    smokes.forEach(function(s){
+      var a=1-s.t/SMOKE_LIFE, r=7+Math.min(s.t,0.5)*14, cx=SX(s.x), cy=SY(s.y);
+      ctx.fillStyle='rgba(226,230,236,'+(0.8*a).toFixed(3)+')';
+      ctx.beginPath(); ctx.arc(cx,cy,r,0,6.283); ctx.arc(cx-r*0.6,cy+r*0.3,r*0.7,0,6.283); ctx.arc(cx+r*0.6,cy+r*0.25,r*0.7,0,6.283); ctx.fill();
+    });
+    enemies.forEach(function(e){ var ep=pos(e), d=e.dir<0?0:e.dir;
+      drawCar(SX(ep.x),SY(ep.y),d*Math.PI/2+e.spin,'#e5343a','#7a1218');
+      if(e.stun>0){ ctx.fillStyle='#ffd33d'; ctx.font='bold 11px Consolas,monospace'; ctx.textAlign='center';
+        ctx.fillText('★',SX(ep.x)+Math.cos(blink*8)*10,SY(ep.y)-14); }
+    });
+
+    var px=SX(pp.x), py=SY(pp.y);
+    if(state==='dead'){
+      if(deadT<1.0){
+        var k=deadT/1.0;
+        ['#fff4c2','#ffd33d','#ff8a3d','#e5343a'].forEach(function(c,i){
+          ctx.fillStyle=c; ctx.globalAlpha=1-k*0.8; ctx.beginPath(); ctx.arc(px,py,(4+i*5)*(0.6+k*1.6),0,6.283); ctx.fill(); });
+        ctx.globalAlpha=1;
+      }
+      drawCar(px,py,P.dir*Math.PI/2+deadT*9*Math.max(0,1-deadT),'#3b4256','#1a1d26');
+    } else drawCar(px,py,P.dir*Math.PI/2,'#3a7bff','#e8f0ff');
+
+    popups.forEach(function(p){
+      ctx.globalAlpha=Math.max(0,1-p.t/1.1); ctx.fillStyle=p.col; ctx.font='bold 13px Consolas,monospace';
+      ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(p.txt,SX(p.x),SY(p.y)-14-p.t*18); });
+    ctx.globalAlpha=1;
+
+    /* 화면 중앙 문구 */
+    function banner(txt,yy,col,size){
+      ctx.font='bold '+(size||22)+'px Consolas,monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.lineWidth=5; ctx.strokeStyle='#05070b'; ctx.strokeText(txt,VW*T/2,yy); ctx.fillStyle=col; ctx.fillText(txt,VW*T/2,yy);
+    }
+    if(state==='ready'){
+      if(introText){ banner('ROUND '+round,CH/2-70,'#fff');
+        if(challenge) banner('CHALLENGING STAGE',CH/2-44,'#4fd1ff',16); }
+      banner('READY!',CH/2+46,'#ffd33d');
+    }
+    if(state==='clear'){ banner('ROUND CLEAR!',CH/2-60,'#7dffa8');
+      if(clearT>1.2) banner('FUEL BONUS',CH/2+46,'#ffd33d',16); }
+    if(state==='over') banner('GAME OVER',CH/2-50,'#e5343a',26);
+    if(state==='play'&&fuel<=0&&Math.floor(blink*3)%2) banner('OUT OF FUEL',CH/2-60,'#ff8a3d',18);
+    ctx.restore();
+
+    drawPanel(pp);
+  }
+
+  function drawPanel(pp){
+    var x0=VW*T, cx=x0+PW/2;
+    ctx.fillStyle='#05070b'; ctx.fillRect(x0,0,PW,CH);
+    ctx.fillStyle='#1c2330'; ctx.fillRect(x0,0,2,CH);
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    function lbl(t,y,c){ ctx.font='bold 11px Consolas,monospace'; ctx.fillStyle=c||'#e5343a'; ctx.fillText(t,cx,y); }
+    function val(t,y){ ctx.font='bold 16px Consolas,monospace'; ctx.fillStyle='#f3f4f6'; ctx.fillText(t,cx,y); }
+    lbl('HI-SCORE',16); val(String(hi),33);
+    lbl('1UP',54); val(String(score),71);
+
+    /* 레이더 */
+    var s=2.5, rw=COLS*s, rh=ROWS*s, rx=Math.round(x0+(PW-rw)/2), ry=90;
+    ctx.fillStyle='#0a1a12'; ctx.fillRect(rx-3,ry-3,rw+6,rh+6);
+    ctx.strokeStyle='#2f7a4a'; ctx.lineWidth=1; ctx.strokeRect(rx-3.5,ry-3.5,rw+7,rh+7);
+    ctx.strokeStyle='rgba(120,200,150,.25)';
+    ctx.strokeRect(rx+(pp.x-VW/2+0.5)*s,ry+(pp.y-VH/2+0.5)*s,VW*s,VH*s);
+    flags.forEach(function(f){ if(f.got) return; ctx.fillStyle=f.type==='n'?'#ffd33d':f.type==='S'?'#ff5fa2':'#4fd1ff';
+      ctx.fillRect(rx+f.x*s,ry+f.y*s,3,3); });
+    ctx.fillStyle='#ff4040';
+    enemies.forEach(function(e){ var ep=pos(e); ctx.fillRect(rx+ep.x*s,ry+ep.y*s,3,3); });
+    if(Math.floor(blink*4)%2===0||state!=='play'){ ctx.fillStyle='#ffffff'; ctx.fillRect(rx+pp.x*s-0.5,ry+pp.y*s-0.5,4,4); }
+
+    /* 연료 */
+    var fy=ry+rh+20;
+    lbl('FUEL',fy,'#9aa0ab');
+    var bw=PW-28, bx=x0+14, fr=fuel/FUEL_MAX;
+    ctx.fillStyle='#1c2330'; ctx.fillRect(bx,fy+9,bw,10);
+    ctx.fillStyle=fr<0.2?(Math.floor(blink*4)%2?'#e5343a':'#ff8a3d'):fr<0.45?'#ffd33d':'#46e07a';
+    ctx.fillRect(bx,fy+9,bw*fr,10);
+
+    lbl('ROUND',fy+38,'#9aa0ab'); val(String(round),fy+55);
+
+    /* 남은 깃발 */
+    var nf=flags.filter(function(f){ return f.type==='n'; });
+    for(var k=0;k<nf.length;k++){
+      var ix=x0+18+(k%5)*20, iy=fy+76+Math.floor(k/5)*22;
+      ctx.globalAlpha=nf[k].got?0.18:1;
+      ctx.fillStyle='#e5e7eb'; ctx.fillRect(ix,iy,2,14);
+      ctx.fillStyle='#ffd33d'; ctx.beginPath(); ctx.moveTo(ix+2,iy); ctx.lineTo(ix+11,iy+3.5); ctx.lineTo(ix+2,iy+7); ctx.fill();
+    }
+    ctx.globalAlpha=1;
+    if(special){ ctx.font='bold 12px Consolas,monospace'; ctx.fillStyle='#ff5fa2'; ctx.fillText('S ×2',cx,fy+128); }
+
+    /* 남은 차 */
+    for(k=0;k<Math.min(lives-1,5);k++){
+      ctx.save(); ctx.translate(x0+20+k*21,CH-18); ctx.scale(0.62,0.62); drawCar(0,0,0,'#3a7bff','#e8f0ff'); ctx.restore();
+    }
+  }
+
+  /* ── 루프 ───────────────────────────────────────────── */
+  var last=0;
+  function frame(ts){
+    var dt=Math.min(0.05,(ts-last)/1000||0); last=ts;
+    if(!paused&&state!=='title') update(dt);
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  /* ── 게임 오버 / 기록 ───────────────────────────────── */
+  function statsHtml(s){
+    return '<div class="stat">플레이<b>'+s.plays+'</b></div><div class="stat">최고 점수<b>'+s.bestScore+'</b></div>'+
+           '<div class="stat">연속 출석<b>'+s.streak+'일</b></div><div class="stat">누적 점수<b>'+s.totalScore+'</b></div>';
+  }
+  function gameOver(){
+    state='over';
+    try{ localStorage.setItem(HI_KEY,String(hi)); }catch(e){}
+    var s=GameStats.record(GAME_ID,{score:score});
+    $('overScore').textContent=score.toLocaleString();
+    $('overInfo').textContent='라운드 '+round+' · 깃발 '+totalFlags+'개'+(score>=hi&&score>0?' · 🏆 최고 기록!':'');
+    $('overStats').innerHTML=statsHtml(s);
+    setTimeout(function(){ $('overOverlay').classList.remove('hidden'); },1400);
+  }
+  $('shareBtn').onclick=function(){
+    GameShare.share({ text:'🚗💨 방구차 — 라운드 '+round+' · '+score.toLocaleString()+'점\n🚩×'+totalFlags, url:SHARE_URL });
+  };
+  function begin(){
+    ac();
+    ['startOverlay','overOverlay','helpOverlay','pauseOverlay'].forEach(function(id){ $(id).classList.add('hidden'); });
+    paused=false; startGame();
+  }
+  $('startBtn').onclick=begin;
+  $('retryBtn').onclick=begin;
+  function showBest(){ $('startBest').textContent=hi?('최고 기록 '+hi.toLocaleString()+'점'):''; }
+  showBest();
+
+  /* ── 일시정지 ───────────────────────────────────────── */
+  function inGame(){ return state==='play'||state==='ready'||state==='dead'||state==='clear'; }
+  function setPause(v){
+    if(v&&!inGame()) return;
+    paused=v; $('pauseOverlay').classList.toggle('hidden',!v);
+  }
+  $('resumeBtn').onclick=function(){ ac(); setPause(false); };
+  document.addEventListener('visibilitychange',function(){ if(document.hidden) setPause(true); });
+  $('helpBtn').onclick=function(){ if(inGame()) setPause(true); $('helpOverlay').classList.remove('hidden'); };
+  $('helpClose').onclick=function(){ $('helpOverlay').classList.add('hidden'); };
+
+  /* ── 입력 ───────────────────────────────────────────── */
+  var KEYS={ArrowUp:0,KeyW:0,ArrowRight:1,KeyD:1,ArrowDown:2,KeyS:2,ArrowLeft:3,KeyA:3};
+  document.addEventListener('keydown',function(e){
+    if(e.code in KEYS){ wish=KEYS[e.code]; e.preventDefault(); return; }
+    if(e.code==='Space'||e.code==='KeyZ'||e.code==='KeyX'){
+      e.preventDefault();
+      if(!$('startOverlay').classList.contains('hidden')||!$('overOverlay').classList.contains('hidden')){ if(e.code==='Space') begin(); return; }
+      if(paused){ setPause(false); return; }
+      if(!e.repeat) doSmoke(); return;
+    }
+    if(e.code==='KeyP'||e.code==='Escape'){ if(inGame()) setPause(!paused); }
+  });
+
+  /* 스와이프 = 운전, 탭 = 방구 */
+  var sw=null;
+  cv.addEventListener('pointerdown',function(e){ ac(); sw={x:e.clientX,y:e.clientY,t:performance.now(),moved:false}; });
+  cv.addEventListener('pointermove',function(e){
+    if(!sw) return; var dx=e.clientX-sw.x, dy=e.clientY-sw.y;
+    if(Math.abs(dx)<22&&Math.abs(dy)<22) return;
+    wish=Math.abs(dx)>Math.abs(dy)?(dx>0?1:3):(dy>0?2:0);
+    sw.x=e.clientX; sw.y=e.clientY; sw.moved=true;
+  });
+  cv.addEventListener('pointerup',function(){ if(sw&&!sw.moved&&performance.now()-sw.t<300) doSmoke(); sw=null; });
+  cv.addEventListener('pointercancel',function(){ sw=null; });
+
+  var dbtns=document.querySelectorAll('#dpad button');
+  Array.prototype.forEach.call(dbtns,function(b){
+    b.addEventListener('pointerdown',function(e){ e.preventDefault(); ac(); wish=+b.dataset.d;
+      Array.prototype.forEach.call(dbtns,function(o){ o.classList.toggle('on',o===b); }); });
+  });
+  $('smokeBtn').addEventListener('pointerdown',function(e){ e.preventDefault(); ac(); doSmoke(); });
+
+  /* 타이틀 화면 뒤에 1라운드 맵을 미리 깔아 둔다 */
+  genMaze(MAZE_SEEDS[0]); placeRocks(3); placeFlags(); resetPositions();
+  requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>
