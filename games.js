@@ -84,9 +84,9 @@ window.GAMES = [
 
   {
     id: "Rally-XYZ",
-    title: "방구차",
-    emoji: "🚗",
-    desc: "오락실 New Rally-X 그대로! 미로에서 깃발 10개를 모으고, 쫓아오는 빨간 차는 방구(연막)로 따돌리세요.",
+    title: "랠리 X",
+    emoji: "🏁",
+    desc: "오락실 New Rally-X를 요즘 그래픽으로! 미로에서 깃발 10개를 모으고, 쫓아오는 빨간 차는 연막으로 따돌리세요. 키보드 하나로 2인 대결.",
     tags: ["아케이드", "레트로", "미로"],
     status: "live",
     accent: "#3a7bff"
