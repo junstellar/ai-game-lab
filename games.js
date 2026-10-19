@@ -86,7 +86,7 @@ window.GAMES = [
     id: "Rally-XYZ",
     title: "랠리 X",
     emoji: "🏁",
-    desc: "오락실 New Rally-X를 요즘 그래픽으로! 미로에서 깃발 10개를 모으고, 쫓아오는 빨간 차는 연막으로 따돌리세요. 키보드 하나로 2인 대결.",
+    desc: "오락실 New Rally-X를 요즘 그래픽으로! 구시가지·항구·공원·선셋 거리를 돌며 깃발 10개를 모으고, 쫓아오는 빨간 차는 연막으로 따돌리세요.",
     tags: ["아케이드", "레트로", "미로"],
     status: "live",
     accent: "#3a7bff"
