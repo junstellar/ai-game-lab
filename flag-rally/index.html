@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>랠리 X — AI 게임 랩</title>
-<meta name="description" content="80년대 오락실 New Rally-X를 요즘 그래픽으로 다시 만들었습니다. 네 동네를 돌며 깃발 10개를 모으고, 쫓아오는 빨간 차는 연막으로 따돌리세요.">
-<meta name="keywords" content="랠리X, New Rally-X, 고전 오락실 게임, 레트로 게임, 무료 브라우저 게임">
+<title>깃발 랠리 — AI 게임 랩</title>
+<meta name="description" content="80년대 오락실 미로 레이싱에서 영감을 받은 깃발 모으기 게임. 네 동네를 돌며 깃발 10개를 모으고, 쫓아오는 빨간 차는 연막으로 따돌리세요.">
+<meta name="keywords" content="깃발 랠리, 미로 레이싱, 고전 오락실 게임, 레트로 게임, 무료 브라우저 게임">
 <link rel="stylesheet" href="../shared.css">
 <style>
   .topbar{ display:flex; align-items:center; justify-content:space-between; padding:12px 18px; max-width:1100px; margin:0 auto; }
@@ -64,7 +64,7 @@
 <body>
   <div class="topbar">
     <a class="home" href="../">← 게임 랩</a>
-    <span class="badge">🏁 랠리 X</span>
+    <span class="badge">🚩 깃발 랠리</span>
     <span class="tbr">
       <button class="iconbtn" id="helpBtn" title="규칙">📖</button>
       <button class="iconbtn" id="muteBtn" title="소리 켜기/끄기">🔊</button>
@@ -76,8 +76,8 @@
       <canvas id="cv"></canvas>
 
       <div class="overlay" id="startOverlay">
-        <h2>🏁 랠리 X</h2>
-        <p>80년대 오락실 <b>New Rally-X</b>를 요즘 그래픽으로 다시 만들었어요.</p>
+        <h2>🚩 깃발 랠리</h2>
+        <p>80년대 오락실 미로 레이싱에서 영감을 받았어요.</p>
         <div class="rules">
           🚩 <b class="y">깃발 10개</b>를 모으면 클리어 (100 → 1000점)<br>
           💨 <b>연막</b>을 밟은 빨간 차는 빙글빙글 멈춰요<br>
@@ -145,7 +145,7 @@
   <script src="../stats.js"></script>
   <script>
   /* =========================================================
-     랠리 X — New Rally-X 이식 (그래픽은 요즘 식으로)
+     깃발 랠리 — 80년대 오락실 미로 레이싱 스타일
      · 위아래좌우로 스크롤되는 미로, 깃발 10개 모으면 클리어.
      · 빨간 차는 BFS 거리장으로 플레이어를 쫓고, 갈림길에서만 방향을 바꾸며
        유턴하지 않는다(팩맨식). 연막을 밟으면 일정 시간 스핀.
@@ -158,8 +158,8 @@
      ========================================================= */
   (function(){
   'use strict';
-  var GAME_ID='Rally-XYZ', SHARE_URL='https://junstellar.github.io/games/Rally-XYZ/';
-  var HI_KEY='gamelab:rallyxyz:hi', MUTE_KEY='gamelab:rallyxyz:mute';
+  var GAME_ID='flag-rally', SHARE_URL='https://junstellar.github.io/games/flag-rally/';
+  var HI_KEY='gamelab:flagrally:hi', MUTE_KEY='gamelab:flagrally:mute';
 
   var COLS=37, ROWS=52;            // 3칸 격자: 12×17 블록
   var T=32;                        // 논리 타일 크기
@@ -1080,7 +1080,7 @@
   }
   $('shareBtn').onclick=function(){
     var w=world;
-    GameShare.share({ text:'🏁 랠리 X — 스테이지 '+w.round+' ('+w.theme.ko+') · '+w.score.toLocaleString()+'점\n🚩×'+w.flags, url:SHARE_URL });
+    GameShare.share({ text:'🚩 깃발 랠리 — 스테이지 '+w.round+' ('+w.theme.ko+') · '+w.score.toLocaleString()+'점\n🚩×'+w.flags, url:SHARE_URL });
   };
   $('startBtn').onclick=begin;
   $('retryBtn').onclick=begin;
