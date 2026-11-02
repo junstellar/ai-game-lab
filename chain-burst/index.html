@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>연쇄 폭발 — 한 번의 탭, 끝없이 번지는 빛 | AI 게임 랩</title>
+  <meta name="description" content="딱 한 번 탭해 빛알을 연쇄 폭발시키세요. 금빛 빛알로 무리 사이를 연결하고, 3라운드 동안 가장 긴 연쇄를 만들어 보세요.">
+  <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#0a1018">
+  <meta property="og:title" content="연쇄 폭발 — AI 게임 랩">
+  <meta property="og:description" content="작은 한 번이, 커다란 연쇄로. 한 번의 탭으로 어디까지 이어질까요?">
+  <link rel="stylesheet" href="../shared.css">
+  <link rel="stylesheet" href="style.css">
+  <script data-goatcounter="https://junstellar.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</head>
+<body>
+  <div class="page">
+    <nav class="topbar" aria-label="게임 메뉴">
+      <a class="home" href="../"><span aria-hidden="true">↖</span> 게임 랩</a>
+      <span class="edition">NO. 011 <span>/</span> ONE TAP ARCADE</span>
+      <div class="utilities">
+        <button id="soundBtn" class="utility" aria-label="소리 끄기" aria-pressed="false">소리 켜짐</button>
+        <button id="pauseBtn" class="utility" disabled>일시정지</button>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <div><p class="eyebrow"><span></span> CHAIN BURST</p><h1>연쇄 폭발<span class="title-dot">.</span></h1></div>
+      <p class="tagline">한 번의 탭.<br>어디까지 이어질까요?</p>
+    </header>
+
+    <main>
+      <section class="console" aria-label="연쇄 폭발 게임">
+        <div class="hud">
+          <div class="metric"><span>ROUND <small>라운드</small></span><strong id="roundValue">01 <i>/ 03</i></strong></div>
+          <div class="metric score-metric"><span>SCORE <small>누적 점수</small></span><strong id="scoreValue">0</strong></div>
+          <div class="metric right"><span>CHAIN <small>최장 연쇄</small></span><strong id="chainValue">0 <i>단계</i></strong></div>
+        </div>
+        <div class="board" id="board">
+          <canvas id="arena" width="720" height="520" tabindex="0" aria-label="게임 영역. 시작 후 원하는 곳을 탭하세요. 키보드는 방향키로 조준하고 스페이스 또는 엔터로 폭발시킵니다.">이 게임은 Canvas를 지원하는 브라우저가 필요합니다.</canvas>
+          <div class="board-label" aria-hidden="true"><span id="fieldLabel">REACTION FIELD</span><span id="fieldCount">40 LIGHTS</span></div>
+          <div class="live-message" id="liveMessage" aria-hidden="true"></div>
+
+          <div class="overlay" id="introPanel">
+            <div class="panel intro-panel">
+              <div class="orbit-mark" aria-hidden="true"><i></i><i></i><i></i><b>✦</b></div>
+              <p class="panel-kicker">ONE TOUCH. A LITTLE CHAOS.</p>
+              <h2>작은 한 번이,<br>커다란 연쇄로.</h2>
+              <p class="panel-copy">빛알이 모이는 순간을 골라 탭하세요.<br>닿은 빛알이 터지며 다음 빛알로 번집니다.</p>
+              <button class="action primary" id="startBtn">연쇄 시작하기 <span aria-hidden="true">↗</span></button>
+              <p class="micro">3라운드 · 라운드마다 한 번 · 플레이 시간 최대 60초</p>
+            </div>
+          </div>
+
+          <div class="overlay" id="roundPanel" hidden>
+            <div class="panel result-panel">
+              <p class="panel-kicker" id="roundKicker">ROUND 01 COMPLETE</p>
+              <h2 id="roundTitle">좋은 시작이에요.</h2>
+              <p class="round-score" id="roundScore">+0</p>
+              <p class="panel-copy" id="roundDetail"></p>
+              <p class="round-tip" id="roundTip"></p>
+              <button class="action primary" id="nextBtn">다음 라운드 <span aria-hidden="true">→</span></button>
+            </div>
+          </div>
+
+          <div class="overlay" id="finishPanel" hidden>
+            <div class="panel result-panel">
+              <p class="panel-kicker" id="finishKicker">YOUR CHAIN REACTION</p>
+              <h2 id="finishTitle">오늘, 빛을 연결한 당신.</h2>
+              <p class="final-score" id="finalScore">0</p>
+              <p class="panel-copy" id="finishDetail"></p>
+              <div class="round-results" id="roundResults" aria-label="라운드별 기록"></div>
+              <div class="result-actions"><button class="action primary" id="againBtn">한 번 더 ↗</button><button class="action secondary" id="shareBtn">결과 공유</button></div>
+              <p class="micro" id="bestMessage"></p>
+            </div>
+          </div>
+
+          <div class="overlay pause-overlay" id="pausePanel" hidden>
+            <div class="panel"><p class="panel-kicker">TAKE YOUR TIME</p><h2>잠깐, 숨 고르기.</h2><p class="panel-copy">빛알과 시계를 함께 멈췄어요.</p><button class="action primary" id="resumeBtn">계속하기 →</button></div>
+          </div>
+        </div>
+
+        <div class="statusbar"><span id="statusText" role="status" aria-live="polite">작은 시작이 큰 연쇄를 만듭니다.</span><span class="shot" id="shotLabel"><i></i> ONE TAP</span></div>
+        <div class="timer-track" role="progressbar" aria-label="조준 시간" aria-valuemin="0" aria-valuemax="8" aria-valuenow="8" id="timerTrack"><div id="timerFill"></div></div>
+      </section>
+
+      <div class="guide" aria-label="플레이 팁">
+        <div><span class="guide-symbol cyan" aria-hidden="true">◎</span><p><b>모이는 순간, 탭</b><span>8초 안에 딱 한 번 쏘세요.</span></p></div>
+        <div><span class="guide-symbol gold" aria-hidden="true">✦</span><p><b>금빛은 더 멀리</b><span>큰 폭발로 다음 무리를 연결해요.</span></p></div>
+        <div><span class="guide-symbol coral" aria-hidden="true">↗</span><p><b>깊어질수록 고득점</b><span>단계마다 +40점, 8단계까지.</span></p></div>
+      </div>
+      <footer class="footnote"><span>내 최고 <b id="bestValue">0</b> <span class="foot-dot">·</span> <span id="playsValue">0</span>판 플레이</span><span>탭 / 클릭 <span class="foot-dot">·</span> 방향키 + SPACE</span></footer>
+      <p class="score-note">빛알 기본 100점 · 금빛 180점 · 연쇄 단계 보너스 추가. 기록은 이 브라우저에 저장됩니다.</p>
+    </main>
+  </div>
+  <script src="../share.js"></script>
+  <script src="../stats.js"></script>
+  <script src="engine.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
